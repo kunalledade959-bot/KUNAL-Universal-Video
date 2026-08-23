@@ -6,6 +6,7 @@ on:
     paths:
       - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
       - ".github/workflows/main.yml"
+      - "ci-repair/UniversalAccessibilityService.kt"
 
 permissions:
   contents: read
@@ -43,6 +44,18 @@ jobs:
           echo "Using project: $PROJECT_DIR"
           echo "Using verifier: $VERIFY_FILE"
           echo "Using package root: $PACKAGE_ROOT"
+
+      - name: Repair verified AccessibilityService source
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPAIR_SOURCE="ci-repair/UniversalAccessibilityService.kt"
+          TARGET="$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          test -s "$REPAIR_SOURCE"
+          test -f "$TARGET"
+          cp "$REPAIR_SOURCE" "$TARGET"
+          cmp -s "$REPAIR_SOURCE" "$TARGET"
+          echo "PASS repaired UniversalAccessibilityService.kt from verified source"
 
       - name: Layer 1-4 source and static audit
         shell: bash
@@ -111,8 +124,6 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          # The package can carry a pre-existing wrapper script with Windows CRLF line endings.
-          # Remove it so Gradle 8.9 creates a clean Linux wrapper, then normalize line endings.
           rm -f ./gradlew ./gradlew.bat
           gradle :wrapper --gradle-version 8.9 --distribution-type bin
           test -f ./gradlew
