@@ -7,9 +7,13 @@ on:
       - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
       - ".github/workflows/main.yml"
 
+permissions:
+  contents: read
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -21,6 +25,7 @@ jobs:
           set -euo pipefail
           ZIP_FILE="KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
           test -f "$ZIP_FILE"
+          unzip -tq "$ZIP_FILE"
           rm -rf verification-package
           mkdir -p verification-package
           unzip -q "$ZIP_FILE" -d verification-package
@@ -28,53 +33,102 @@ jobs:
           test -n "$PROJECT_DIR"
           test -f "$PROJECT_DIR/build.gradle.kts"
           test -f "$PROJECT_DIR/app/build.gradle.kts"
+          VERIFY_FILE="$(find verification-package -type f -name verify_7_layers.py -print -quit)"
+          test -n "$VERIFY_FILE"
+          PACKAGE_ROOT="$(dirname "$VERIFY_FILE")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "VERIFY_FILE=$VERIFY_FILE" >> "$GITHUB_ENV"
+          echo "PACKAGE_ROOT=$PACKAGE_ROOT" >> "$GITHUB_ENV"
           echo "Using project: $PROJECT_DIR"
+          echo "Using verifier: $VERIFY_FILE"
 
-      - name: Set up Python 3
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Run 7-layer source/static verification
+      - name: Layer 1-4 source and static audit
         shell: bash
         run: |
           set -euo pipefail
-          VERIFY_FILE="$(find verification-package -type f -name verify_7_layers.py -print -quit)"
-          test -n "$VERIFY_FILE"
-          python "$VERIFY_FILE"
+          echo "=== LAYER 1: SOURCE ==="
+          test -f "$PACKAGE_ROOT/SOURCE_MASTER.py"
+          test -f "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
+          test -f "$PACKAGE_ROOT/KUNAL_UNIVERSAL_VIDEO_MASTER_HANDOFF.md"
+          grep -q "1.*APK Startup / Self-Diagnostic" "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
+          grep -q "12.*Final Gallery Export" "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
+          echo "PASS L1 source and locked sequence files present"
+
+          echo "=== LAYER 2: ANDROID PROJECT ==="
+          test -f "$PROJECT_DIR/settings.gradle.kts"
+          test -f "$PROJECT_DIR/gradlew"
+          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          test -f "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/MainActivity.kt"
+          test -f "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          test -f "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/ScreenCaptureService.kt"
+          test -f "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/GalleryExporter.kt"
+          echo "PASS L2 Android project structure"
+
+          echo "=== LAYER 3: STATIC AUDIT ==="
+          MANIFEST="$PROJECT_DIR/app/src/main/AndroidManifest.xml"
+          grep -q "android.permission.INTERNET" "$MANIFEST"
+          grep -q "FOREGROUND_SERVICE" "$MANIFEST"
+          grep -q "FOREGROUND_SERVICE_MEDIA_PROJECTION" "$MANIFEST"
+          grep -q "UniversalAccessibilityService" "$MANIFEST"
+          grep -q "ScreenCaptureService" "$MANIFEST"
+          grep -q "ServerSocket" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/LocalBridgeService.kt" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/MainActivity.kt"
+          grep -q "MediaProjectionManager" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/ScreenCaptureService.kt"
+          grep -q "MediaStore" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/GalleryExporter.kt"
+          echo "PASS L3 manifest, transport, capture, gallery static checks"
+
+          echo "=== LAYER 4: CI BUILD CONFIG ==="
+          test -f "$PROJECT_DIR/gradlew"
+          grep -q "assembleDebug" "$PACKAGE_ROOT/.github/workflows/android-apk.yml"
+          grep -q "actions/checkout@v4" "$PACKAGE_ROOT/.github/workflows/android-apk.yml"
+          grep -q "actions/setup-java@v4" "$PACKAGE_ROOT/.github/workflows/android-apk.yml"
+          grep -q "gradle/actions/setup-gradle@v4" "$PACKAGE_ROOT/.github/workflows/android-apk.yml"
+          echo "PASS L4 CI configuration"
+
+          echo "NOTE: Full verify_7_layers.py is intentionally NOT used as a pre-build gate."
+          echo "Its L5 check requires an APK that does not exist until the build step."
+          echo "L6/L7 require real phone/runtime evidence and cannot be honestly satisfied by CI."
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
 
       - name: Build Debug APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          gradle :app:assembleDebug --stacktrace
+          chmod +x ./gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify APK exists
+      - name: Layer 5 APK artifact verification
         shell: bash
         run: |
           set -euo pipefail
-          find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' -print
-          test "$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' | wc -l)" -gt 0
+          APK_DIR="$PROJECT_DIR/app/build/outputs/apk/debug"
+          test -d "$APK_DIR"
+          APK_COUNT="$(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' | wc -l)"
+          test "$APK_COUNT" -ge 1
+          APK_FILE="$(find "$APK_DIR" -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          unzip -tq "$APK_FILE"
+          echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
+          echo "PASS L5 APK exists and ZIP integrity is valid: $APK_FILE"
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-APK
-          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
+          path: ${{ env.APK_FILE }}
           if-no-files-found: error
+
+      - name: Verification boundary
+        shell: bash
+        run: |
+          echo "L1-L5 completed by this CI run."
+          echo "L6 Runtime and L7 Repeat remain UNVERIFIED until a real phone session and repeated 2-minute ChromaToon evidence are available."
