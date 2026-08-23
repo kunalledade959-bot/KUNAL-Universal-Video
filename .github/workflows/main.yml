@@ -9,7 +9,7 @@ on:
       - "ci-repair/UniversalAccessibilityService.kt"
 
 permissions:
-  contents: read
+  contents: write
 
 # Triggered verification build on the ChromaToon build branch.
 jobs:
@@ -165,6 +165,18 @@ jobs:
           name: KUNAL-Universal-Video-APK
           path: ${{ env.APK_FILE }}
           if-no-files-found: error
+
+      - name: Publish APK release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="apk-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "$APK_FILE" \
+            --title "KUNAL Universal Video APK #${GITHUB_RUN_NUMBER}" \
+            --notes "Verified L1-L5 CI build artifact from commit ${GITHUB_SHA}. Runtime L6/L7 remain unverified."
+          echo "PASS APK published as GitHub Release asset: $TAG"
 
       - name: Verification boundary
         shell: bash
