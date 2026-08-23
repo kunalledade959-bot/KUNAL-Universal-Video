@@ -69,7 +69,9 @@ jobs:
           disable-animations: true
           script: |
             set -uo pipefail
-            APK="$GITHUB_WORKSPACE/${APK_FILE#*/}"
+            APK="$APK_FILE"
+            echo "APK=$APK"
+            test -s "$APK"
             adb wait-for-device
             adb logcat -c
             adb install -r "$APK"
@@ -85,8 +87,9 @@ jobs:
             echo "===== STARTUP LOG ====="
             adb logcat -d -v threadtime | grep -E "AndroidRuntime|FATAL EXCEPTION|$PACKAGE|Process:|Caused by:" | tail -n 250 || true
             echo "===== PROCESS STATE ====="
-            adb shell pidof "$PACKAGE" || true
-            if ! adb shell pidof "$PACKAGE" >/dev/null 2>&1; then
+            PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+            echo "PID=$PID"
+            if [ -z "$PID" ]; then
               echo "RUNTIME_CRASH_CONFIRMED"
               exit 1
             fi
