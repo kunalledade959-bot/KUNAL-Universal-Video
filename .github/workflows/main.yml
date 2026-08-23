@@ -111,16 +111,27 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          gradle wrapper --gradle-version 8.9 --distribution-type bin
+          # The package can carry a pre-existing wrapper script with Windows CRLF line endings.
+          # Remove it so Gradle 8.9 creates a clean Linux wrapper, then normalize line endings.
+          rm -f ./gradlew ./gradlew.bat
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          test -f ./gradlew
+          test -f ./gradlew.bat
+          sed -i 's/\r$//' ./gradlew
+          chmod +x ./gradlew
           test -x ./gradlew
-          echo "PASS Gradle wrapper generated"
+          if grep -q $'\r' ./gradlew; then
+            echo "ERROR: gradlew still contains CRLF line endings"
+            exit 1
+          fi
+          ./gradlew --version
+          echo "PASS Gradle wrapper generated and normalized"
 
       - name: Build Debug APK
         shell: bash
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          chmod +x ./gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Layer 5 APK artifact verification
