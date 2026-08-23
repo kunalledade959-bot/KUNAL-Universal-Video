@@ -36,12 +36,13 @@ jobs:
           test -f "$PROJECT_DIR/app/build.gradle.kts"
           VERIFY_FILE="$(find verification-package -type f -name verify_7_layers.py -print -quit)"
           test -n "$VERIFY_FILE"
-          PACKAGE_ROOT="$(dirname "$VERIFY_FILE")"
+          PACKAGE_ROOT="$(dirname "$(dirname "$VERIFY_FILE")")"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "VERIFY_FILE=$VERIFY_FILE" >> "$GITHUB_ENV"
           echo "PACKAGE_ROOT=$PACKAGE_ROOT" >> "$GITHUB_ENV"
           echo "Using project: $PROJECT_DIR"
           echo "Using verifier: $VERIFY_FILE"
+          echo "Using package root: $PACKAGE_ROOT"
 
       - name: Layer 1-4 source and static audit
         shell: bash
