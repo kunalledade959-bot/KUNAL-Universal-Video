@@ -1,0 +1,83 @@
+name: Runtime Crash Diagnostic Fixed
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+      - "ci-repair/UniversalAccessibilityService.kt"
+      - ".github/workflows/runtime-diagnostic-fixed.yml"
+permissions:
+  contents: read
+jobs:
+  runtime-diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Extract project and apply verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -tq KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip
+          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
+          PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          cp ci-repair/UniversalAccessibilityService.kt "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Build diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
+      - name: Launch APK on Android emulator and capture crash log
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -uo pipefail
+            APK="$APK_FILE"
+            adb wait-for-device
+            adb logcat -c
+            adb install -r "$APK"
+            PACKAGE="$(aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")"
+            ACTIVITY="$(aapt dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")"
+            test -n "$PACKAGE"
+            test -n "$ACTIVITY"
+            adb shell am force-stop "$PACKAGE" || true
+            adb shell am start -n "$PACKAGE/$ACTIVITY" || true
+            sleep 10
+            echo "===== STARTUP LOG ====="
+            adb logcat -d -v threadtime | grep -E "AndroidRuntime|FATAL EXCEPTION|$PACKAGE|Process:|Caused by:" | tail -n 250 || true
+            echo "===== PROCESS STATE ====="
+            PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' | xargs || true)"
+            echo "PID=$PID"
+            if [ -z "$PID" ]; then
+              echo "RUNTIME_CRASH_CONFIRMED"
+              exit 1
+            fi
+            echo "RUNTIME_STARTUP_SURVIVED"
