@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
 
+# Triggered verification build on the ChromaToon build branch.
 jobs:
   build-apk:
     runs-on: ubuntu-latest
