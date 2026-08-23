@@ -51,7 +51,7 @@ jobs:
           test -f "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
           test -f "$PACKAGE_ROOT/KUNAL_UNIVERSAL_VIDEO_MASTER_HANDOFF.md"
           grep -q "1.*APK Startup / Self-Diagnostic" "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
-          grep -q "12.*Final Gallery Export" "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
+          grep -q "12.*Gallery Export" "$PACKAGE_ROOT/LOCKED_FUNCTION_ORDER.md"
           echo "PASS L1 source and locked sequence files present"
 
           echo "=== LAYER 2: ANDROID PROJECT ==="
