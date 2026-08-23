@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "*.zip"
+      - "KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip"
       - ".github/workflows/main.yml"
 
 jobs:
@@ -15,27 +15,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find and extract Android project
+      - name: Extract verified Android project
         shell: bash
         run: |
-          set -e
-
-          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Android project ZIP not found."
-            echo "Files available:"
-            find . -maxdepth 2 -type f -print
-            exit 1
-          fi
-
-          echo "Using ZIP: $ZIP_FILE"
+          set -euo pipefail
+          ZIP_FILE="KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip"
+          test -f "$ZIP_FILE"
           rm -rf android-project
           mkdir -p android-project
           unzip -q "$ZIP_FILE" -d android-project
-
-          echo "Extracted project:"
-          find android-project -maxdepth 4 -type f -print
+          PROJECT_DIR="$(find android-project -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          test -f "$PROJECT_DIR/build.gradle.kts"
+          test -f "$PROJECT_DIR/app/build.gradle.kts"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Using project: $PROJECT_DIR"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -43,68 +37,30 @@ jobs:
           distribution: temurin
           java-version: "17"
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.10.2"
-
-      - name: Verify Android project
-        shell: bash
-        run: |
-          set -e
-
-          cd android-project
-
-          if [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle.kts not found."
-            exit 1
-          fi
-
-          if [ ! -f "build.gradle.kts" ]; then
-            echo "ERROR: build.gradle.kts not found."
-            exit 1
-          fi
-
-          if [ ! -f "app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle.kts not found."
-            exit 1
-          fi
-
-          echo "PROJECT STRUCTURE OK"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
       - name: Build Debug APK
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          if [ -x ./gradlew ]; then
+            ./gradlew :app:assembleDebug --stacktrace
+          else
+            gradle :app:assembleDebug --stacktrace
+          fi
 
-          cd android-project
-
-          gradle :app:assembleDebug --stacktrace --info
-
-      - name: Locate APK
+      - name: Verify APK exists
         shell: bash
         run: |
-          set -e
-
-          echo "Searching for generated APK..."
-
-          find android-project/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK_COUNT="$(find android-project/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" | wc -l)"
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
+          set -euo pipefail
+          find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' -print
+          test "$(find "$PROJECT_DIR/app/build/outputs/apk" -type f -name '*.apk' | wc -l)" -gt 0
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-APK
-          path: android-project/app/build/outputs/apk/**/*.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
