@@ -15,46 +15,35 @@ jobs:
   build-fixed-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract proven Android project
+      - name: Extract proven app
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE="KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
-          test -s "$ZIP_FILE"
-          unzip -tq "$ZIP_FILE"
+          unzip -tq KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip
           rm -rf verification-package
-          mkdir -p verification-package
-          unzip -q "$ZIP_FILE" -d verification-package
-
+          mkdir verification-package
+          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
           PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
-          test -n "$PROJECT_DIR"
           APP_DIR="$PROJECT_DIR/app"
-          MANIFEST="$APP_DIR/src/main/AndroidManifest.xml"
-          APP_BUILD="$APP_DIR/build.gradle.kts"
-          MAIN_ACTIVITY="$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt"
-
           test -f "$PROJECT_DIR/settings.gradle.kts"
           test -f "$PROJECT_DIR/build.gradle.kts"
-          test -f "$APP_BUILD"
-          test -f "$MANIFEST"
-          test -f "$MAIN_ACTIVITY"
-
+          test -f "$APP_DIR/build.gradle.kts"
+          test -f "$APP_DIR/src/main/AndroidManifest.xml"
+          test -f "$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt"
           {
             echo "PROJECT_DIR=$PROJECT_DIR"
             echo "APP_DIR=$APP_DIR"
-            echo "MANIFEST=$MANIFEST"
-            echo "APP_BUILD=$APP_BUILD"
-            echo "MAIN_ACTIVITY=$MAIN_ACTIVITY"
+            echo "MANIFEST=$APP_DIR/src/main/AndroidManifest.xml"
+            echo "APP_BUILD=$APP_DIR/build.gradle.kts"
+            echo "MAIN_ACTIVITY=$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt"
           } >> "$GITHUB_ENV"
+          echo "PASS: direct proven app path = $APP_DIR"
 
-          echo "PASS: proven app path located: $APP_DIR"
-
-      - name: Apply verified AccessibilityService source
+      - name: Install verified AccessibilityService
         shell: bash
         run: |
           set -euo pipefail
@@ -63,97 +52,94 @@ jobs:
           test -f "$TARGET"
           cp ci-repair/UniversalAccessibilityService.kt "$TARGET"
           cmp -s ci-repair/UniversalAccessibilityService.kt "$TARGET"
-          echo "PASS: AccessibilityService source installed"
 
-      - name: Apply runtime startup fix directly to app
+      - name: Repair startup crash contract
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import os,re
           from pathlib import Path
-          import re
+          app=Path(os.environ['APP_DIR'])
+          manifest=Path(os.environ['MANIFEST'])
+          build=Path(os.environ['APP_BUILD'])
+          main=Path(os.environ['MAIN_ACTIVITY'])
 
-          app = Path("${APP_DIR}")
-          manifest = Path("${MANIFEST}")
-          build = Path("${APP_BUILD}")
-          main = Path("${MAIN_ACTIVITY}")
+          # MainActivity -> AppCompatActivity when necessary.
+          s=main.read_text(encoding='utf-8')
+          if 'AppCompatActivity' not in s:
+              if 'import android.app.Activity' in s:
+                  s=s.replace('import android.app.Activity','import androidx.appcompat.app.AppCompatActivity')
+              elif 'import androidx.appcompat.app.AppCompatActivity' not in s:
+                  lines=s.splitlines(True)
+                  for i,line in enumerate(lines):
+                      if line.startswith('package '):
+                          lines.insert(i+1,'\nimport androidx.appcompat.app.AppCompatActivity\n')
+                          break
+                  s=''.join(lines)
+              s=re.sub(r':\s*(?:Activity|ComponentActivity)\s*\(', ': AppCompatActivity(', s, count=1)
+              if 'AppCompatActivity' not in s or not re.search(r'class\s+MainActivity[^\n]*AppCompatActivity',s):
+                  raise SystemExit('MainActivity could not be converted safely')
+              main.write_text(s,encoding='utf-8')
 
-          # 1) Make the real MainActivity AppCompat-compatible.
-          text = main.read_text(encoding="utf-8")
-          if "AppCompatActivity" not in text:
-              text = text.replace("import android.app.Activity", "import androidx.appcompat.app.AppCompatActivity")
-              text = text.replace("import android.app.Activity\n", "")
-              text = re.sub(r'(:\\s*)(?:Activity|ComponentActivity)(\\s*\\()', r'\\1AppCompatActivity\\2', text, count=1)
-              if "AppCompatActivity" not in text:
-                  raise SystemExit(f"Could not convert MainActivity to AppCompatActivity: {main}")
-              main.write_text(text, encoding="utf-8")
+          # AppCompat dependency in the real app module.
+          g=build.read_text(encoding='utf-8')
+          if 'androidx.appcompat:appcompat' not in g:
+              dep='\n    implementation("androidx.appcompat:appcompat:1.7.0")'
+              m=re.search(r'(?m)^\s*dependencies\s*\{',g)
+              if not m:
+                  raise SystemExit('dependencies block not found in app/build.gradle.kts')
+              p=g.find('\n',m.start())+1
+              g=g[:p]+dep+'\n'+g[p:]
+              build.write_text(g,encoding='utf-8')
 
-          # 2) Add AppCompat dependency to the actual app module only.
-          gradle = build.read_text(encoding="utf-8")
-          if "androidx.appcompat:appcompat" not in gradle:
-              dep = '    implementation("androidx.appcompat:appcompat:1.7.0")\n'
-              m = re.search(r'(?m)^dependencies\\s*\\{', gradle)
-              if m:
-                  pos = m.end()
-                  gradle = gradle[:pos] + "\n" + dep + gradle[pos:]
-              else:
-                  gradle += '\n\ndependencies {\n' + dep + '}\n'
-              build.write_text(gradle, encoding="utf-8")
+          # Dedicated startup theme.
+          values=app/'src/main/res/values'
+          values.mkdir(parents=True,exist_ok=True)
+          (values/'kunal_runtime_theme.xml').write_text('''<?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />
+          </resources>
+          ''',encoding='utf-8')
 
-          # 3) Install a deterministic AppCompat startup theme without destroying existing resources.
-          values = app / "src/main/res/values"
-          values.mkdir(parents=True, exist_ok=True)
-          theme_file = values / "kunal_runtime_theme.xml"
-          theme_file.write_text('''<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n''', encoding="utf-8")
+          # Apply theme to application and MainActivity.
+          x=manifest.read_text(encoding='utf-8')
+          if not re.search(r'<application\b',x): raise SystemExit('No application tag in actual manifest')
+          theme='@style/KunalRuntimeTheme'
+          def add(m):
+              tag=m.group(0)
+              if re.search(r'android:theme\s*=\s*"[^"]*"',tag):
+                  return re.sub(r'android:theme\s*=\s*"[^"]*"',f'android:theme="{theme}"',tag,count=1)
+              return tag[:-1]+f' android:theme="{theme}">'
+          x=re.sub(r'<application\b[^>]*>',add,x,count=1,flags=re.S)
+          ap=r'<activity\b(?=[^>]*android:name\s*=\s*"[^"]*MainActivity")[^>]*>'
+          if not re.search(ap,x,re.S): raise SystemExit('MainActivity manifest entry not found')
+          x=re.sub(ap,add,x,count=1,flags=re.S)
+          manifest.write_text(x,encoding='utf-8')
 
-          # 4) Apply the same theme to application and MainActivity in the actual manifest.
-          xml = manifest.read_text(encoding="utf-8")
-          if not re.search(r'<application\\b', xml):
-              raise SystemExit(f"No application tag: {manifest}")
-          theme = "@style/KunalRuntimeTheme"
-
-          def theme_tag(m):
-              tag = m.group(0)
-              if re.search(r'android:theme\\s*=\\s*"[^"]*"', tag):
-                  return re.sub(r'android:theme\\s*=\\s*"[^"]*"', f'android:theme="{theme}"', tag, count=1)
-              return tag[:-1] + f' android:theme="{theme}">'
-
-          xml = re.sub(r'<application\\b[^>]*>', theme_tag, xml, count=1, flags=re.S)
-          activity = re.compile(r'<activity\\b(?=[^>]*android:name\\s*=\\s*"[^"]*MainActivity")[^>]*>', re.S)
-          if not activity.search(xml):
-              raise SystemExit(f"MainActivity manifest entry not found: {manifest}")
-          xml = activity.sub(theme_tag, xml, count=1)
-          manifest.write_text(xml, encoding="utf-8")
-
-          # 5) Hard verification before Gradle starts.
-          final_main = main.read_text(encoding="utf-8")
-          final_manifest = manifest.read_text(encoding="utf-8")
-          final_gradle = build.read_text(encoding="utf-8")
-          final_theme = theme_file.read_text(encoding="utf-8")
-          assert "AppCompatActivity" in final_main
-          assert "androidx.appcompat:appcompat" in final_gradle
-          assert "@style/KunalRuntimeTheme" in final_manifest
-          assert "KunalRuntimeTheme" in final_theme
-          assert "Theme.AppCompat.Light.NoActionBar" in final_theme
-          print("PASS: runtime startup contract applied to the actual app")
+          # Hard pre-build verification.
+          assert 'AppCompatActivity' in main.read_text(encoding='utf-8')
+          assert 'androidx.appcompat:appcompat' in build.read_text(encoding='utf-8')
+          assert theme in manifest.read_text(encoding='utf-8')
+          assert 'Theme.AppCompat.Light.NoActionBar' in (values/'kunal_runtime_theme.xml').read_text(encoding='utf-8')
+          print('PASS: startup crash repair applied to actual app')
           PY
 
       - name: Static verification
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "AppCompatActivity" "$MAIN_ACTIVITY"
-          grep -q "androidx.appcompat:appcompat" "$APP_BUILD"
-          grep -q "@style/KunalRuntimeTheme" "$MANIFEST"
-          grep -q "KunalRuntimeTheme" "$APP_DIR/src/main/res/values/kunal_runtime_theme.xml"
-          grep -q "Theme.AppCompat.Light.NoActionBar" "$APP_DIR/src/main/res/values/kunal_runtime_theme.xml"
-          echo "PASS: static startup verification"
+          grep -q 'AppCompatActivity' "$MAIN_ACTIVITY"
+          grep -q 'androidx.appcompat:appcompat' "$APP_BUILD"
+          grep -q '@style/KunalRuntimeTheme' "$MANIFEST"
+          grep -q 'Theme.AppCompat.Light.NoActionBar' "$APP_DIR/src/main/res/values/kunal_runtime_theme.xml"
+          echo 'PASS: all startup checks'
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
           cache: gradle
 
       - name: Set up Android SDK
@@ -162,20 +148,19 @@ jobs:
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.9"
+          gradle-version: '8.9'
 
-      - name: Build fixed APK directly
+      - name: Build APK directly
         shell: bash
         run: |
           set -o pipefail
           cd "$PROJECT_DIR"
-          rm -f ./gradlew ./gradlew.bat
+          rm -f gradlew gradlew.bat
           gradle :wrapper --gradle-version 8.9 --distribution-type bin 2>&1 | tee "$GITHUB_WORKSPACE/gradle-wrapper.log"
-          sed -i 's/\r$//' ./gradlew
-          chmod +x ./gradlew
+          chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
 
-      - name: Verify and upload APK
+      - name: Verify APK
         shell: bash
         run: |
           set -euo pipefail
@@ -183,7 +168,7 @@ jobs:
           test -s "$APK_FILE"
           unzip -tq "$APK_FILE"
           echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
-          echo "PASS: fixed APK built and ZIP-valid: $APK_FILE"
+          echo "PASS: fixed APK ready: $APK_FILE"
 
       - name: Upload fixed APK
         uses: actions/upload-artifact@v4
@@ -192,30 +177,24 @@ jobs:
           path: ${{ env.APK_FILE }}
           if-no-files-found: error
 
-      - name: Failure diagnostics
+      - name: Automatic failure evidence
         if: always()
         shell: bash
         run: |
           set +e
           mkdir -p ci-results
           {
-            echo "# Runtime startup fix diagnosis"
             echo "Run: $GITHUB_RUN_ID"
             echo "Commit: $GITHUB_SHA"
             echo "Status: ${{ job.status }}"
             echo "Project: ${PROJECT_DIR:-unknown}"
             echo "App: ${APP_DIR:-unknown}"
-            echo "Manifest: ${MANIFEST:-unknown}"
-            echo "MainActivity: ${MAIN_ACTIVITY:-unknown}"
             echo
-            if [ -f gradle-build.log ]; then
-              grep -E -i "(FAILURE:|What went wrong:|Execution failed|Could not resolve|Could not find|Unresolved reference|e: |error:|Caused by:|Exception|manifest merger failed)" gradle-build.log | tail -n 160 || true
-              echo
-              tail -n 160 gradle-build.log || true
-            fi
+            grep -E -i '(FAILURE:|What went wrong:|Execution failed|Could not resolve|Could not find|Unresolved reference|e: |error:|Caused by:|Exception|manifest merger failed)' gradle-build.log 2>/dev/null | tail -n 160 || true
+            tail -n 160 gradle-build.log 2>/dev/null || true
           } > ci-results/runtime-fixed-diagnosis.md
 
-      - name: Upload diagnostics
+      - name: Upload failure evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
