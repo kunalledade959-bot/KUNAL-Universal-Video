@@ -36,6 +36,25 @@ jobs:
           echo "APP_BUILD=$APP_DIR/build.gradle.kts" >> "$GITHUB_ENV"
           echo "MAIN_ACTIVITY=$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt" >> "$GITHUB_ENV"
 
+      - name: Publish exact MainActivity source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ci-results
+          cp "$MAIN_ACTIVITY" ci-results/extracted-MainActivity.kt
+          {
+            echo "# Exact extracted MainActivity source"
+            echo
+            echo "Source: $MAIN_ACTIVITY"
+            echo
+            nl -ba "$MAIN_ACTIVITY"
+          } > ci-results/extracted-MainActivity-numbered.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-results/extracted-MainActivity.kt ci-results/extracted-MainActivity-numbered.txt
+          git diff --cached --quiet || git commit -m "ci: publish exact MainActivity source snapshot"
+          git push
+
       - name: Install canonical AccessibilityService
         shell: bash
         run: |
@@ -76,7 +95,6 @@ jobs:
                   if local(parent.tag) not in {'ScrollView', 'HorizontalScrollView', 'NestedScrollView'}:
                       continue
                   children = list(parent)
-                  # ScrollView-family containers may contain exactly one direct View child.
                   if len(children) <= 1:
                       continue
                   wrapper = ET.Element('LinearLayout')
@@ -93,7 +111,6 @@ jobs:
                   repaired.append(str(path))
               checked += 1
 
-          # Startup layout must be repaired if it is malformed; do not silently ship it.
           startup = list(layout_dir.rglob('activity_main.xml'))
           if not startup:
               raise SystemExit('activity_main.xml not found')
@@ -102,7 +119,6 @@ jobs:
           for p in repaired:
               print(p)
 
-          # Independent post-repair audit: no ScrollView-family node may have >1 direct child.
           violations = []
           for path in layout_dir.rglob('*.xml'):
               try:
@@ -117,7 +133,7 @@ jobs:
           print('PASS: no ScrollView-family container has multiple direct children')
           PY
 
-      - name: Apply permanent runtime theme contract
+      - name: Permanent runtime theme contract
         shell: bash
         run: |
           set -euo pipefail
@@ -254,6 +270,8 @@ jobs:
           name: runtime-v3-diagnostics-${{ github.run_number }}
           path: |
             ci-results/runtime-v3-diagnosis.md
+            ci-results/extracted-MainActivity.kt
+            ci-results/extracted-MainActivity-numbered.txt
             gradle-build.log
             gradle-wrapper.log
           if-no-files-found: ignore
