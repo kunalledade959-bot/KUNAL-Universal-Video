@@ -70,6 +70,14 @@ jobs:
           echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
           echo "BUILD_PASS" > "$GITHUB_WORKSPACE/runtime-status.txt"
 
+      - name: Reclaim runner disk space before emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$HOME/.gradle/caches" "$HOME/.gradle/wrapper" "$HOME/.cache"
+          rm -rf "$ANDROID_SDK_ROOT/.android" 2>/dev/null || true
+          df -h "$HOME"
+
       - name: Install and launch APK on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -80,7 +88,7 @@ jobs:
           cores: 2
           ram-size: 2048M
           heap-size: 512M
-          disk-size: 4G
+          disk-size: 2G
           avd-name: kunal-runtime-api30
           force-avd-creation: true
           emulator-boot-timeout: 900
