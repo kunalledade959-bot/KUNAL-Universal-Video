@@ -46,6 +46,77 @@ jobs:
           cp ci-repair/UniversalAccessibilityService.kt "$TARGET"
           cmp -s ci-repair/UniversalAccessibilityService.kt "$TARGET"
 
+      - name: Repair actual startup layout contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          app = Path(os.environ['APP_DIR'])
+          layout_dir = app / 'src/main/res'
+          android = 'http://schemas.android.com/apk/res/android'
+          ET.register_namespace('android', android)
+
+          def local(tag):
+              return tag.rsplit('}', 1)[-1]
+
+          repaired = []
+          checked = 0
+          for path in layout_dir.rglob('*.xml'):
+              try:
+                  tree = ET.parse(path)
+              except ET.ParseError:
+                  continue
+              root = tree.getroot()
+              changed = False
+              for parent in list(root.iter()):
+                  if local(parent.tag) not in {'ScrollView', 'HorizontalScrollView', 'NestedScrollView'}:
+                      continue
+                  children = list(parent)
+                  # ScrollView-family containers may contain exactly one direct View child.
+                  if len(children) <= 1:
+                      continue
+                  wrapper = ET.Element('LinearLayout')
+                  wrapper.set(f'{{{android}}}layout_width', 'match_parent')
+                  wrapper.set(f'{{{android}}}layout_height', 'wrap_content')
+                  wrapper.set(f'{{{android}}}orientation', 'vertical')
+                  for child in children:
+                      parent.remove(child)
+                      wrapper.append(child)
+                  parent.append(wrapper)
+                  changed = True
+              if changed:
+                  tree.write(path, encoding='utf-8', xml_declaration=True)
+                  repaired.append(str(path))
+              checked += 1
+
+          # Startup layout must be repaired if it is malformed; do not silently ship it.
+          startup = list(layout_dir.rglob('activity_main.xml'))
+          if not startup:
+              raise SystemExit('activity_main.xml not found')
+          print(f'Checked {checked} layout XML files')
+          print('Repaired ScrollView-family layouts:')
+          for p in repaired:
+              print(p)
+
+          # Independent post-repair audit: no ScrollView-family node may have >1 direct child.
+          violations = []
+          for path in layout_dir.rglob('*.xml'):
+              try:
+                  root = ET.parse(path).getroot()
+              except ET.ParseError:
+                  continue
+              for node in root.iter():
+                  if local(node.tag) in {'ScrollView', 'HorizontalScrollView', 'NestedScrollView'} and len(list(node)) > 1:
+                      violations.append(f'{path}:{local(node.tag)}:{len(list(node))}')
+          if violations:
+              raise SystemExit('INVALID ScrollView structure remains: ' + '; '.join(violations))
+          print('PASS: no ScrollView-family container has multiple direct children')
+          PY
+
       - name: Apply permanent runtime theme contract
         shell: bash
         run: |
@@ -59,7 +130,6 @@ jobs:
           main=Path(os.environ['MAIN_ACTIVITY'])
           theme='@style/KunalRuntimeTheme'
 
-          # Keep MainActivity on AppCompatActivity and make the dependency explicit.
           s=main.read_text(encoding='utf-8')
           if not re.search(r'\bimport\s+androidx\.appcompat\.app\.AppCompatActivity\b',s):
               s=re.sub(r'(?m)^package\s+[^\n]+\n',lambda m:m.group(0)+'\nimport androidx.appcompat.app.AppCompatActivity\n',s,count=1)
@@ -67,8 +137,6 @@ jobs:
           s=re.sub(r'\bclass\s+MainActivity\s*:\s*ComponentActivity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
           if not re.search(r'class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(',s):
               raise SystemExit('MainActivity is not AppCompatActivity after repair')
-
-          # Critical runtime guard: set the AppCompat theme BEFORE super.onCreate().
           if 'setTheme(R.style.KunalRuntimeTheme)' not in s:
               m=re.search(r'(?m)^(\s*)super\.onCreate\s*\(',s)
               if not m:
@@ -79,7 +147,6 @@ jobs:
               raise SystemExit('Runtime theme guard is after super.onCreate')
           main.write_text(s,encoding='utf-8')
 
-          # AppCompat dependency.
           g=build.read_text(encoding='utf-8')
           if 'androidx.appcompat:appcompat' not in g:
               m=re.search(r'(?m)^\s*dependencies\s*\{',g)
@@ -88,12 +155,10 @@ jobs:
               g=g[:p]+'    implementation("androidx.appcompat:appcompat:1.7.0")\n'+g[p:]
               build.write_text(g,encoding='utf-8')
 
-          # Dedicated AppCompat theme.
           values=app/'src/main/res/values'
           values.mkdir(parents=True,exist_ok=True)
           (values/'kunal_runtime_theme.xml').write_text('''<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n''',encoding='utf-8')
 
-          # Explicit manifest fallback for both application and activity.
           x=manifest.read_text(encoding='utf-8')
           def add_theme(m):
               tag=m.group(0)
@@ -106,9 +171,8 @@ jobs:
           x=re.sub(activity,add_theme,x,count=1,flags=re.S)
           manifest.write_text(x,encoding='utf-8')
 
-          # Hard source-level gate.
-          assert re.search(r'class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(',main.read_text(encoding='utf-8'))
           ms=main.read_text(encoding='utf-8')
+          assert re.search(r'class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(',ms)
           assert ms.index('setTheme(R.style.KunalRuntimeTheme)') < ms.index('super.onCreate')
           assert 'androidx.appcompat:appcompat' in build.read_text(encoding='utf-8')
           assert x.count('@style/KunalRuntimeTheme') >= 2
@@ -148,14 +212,13 @@ jobs:
           APK_FILE="$(find "$APP_DIR/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit)"
           test -s "$APK_FILE"
           unzip -tq "$APK_FILE"
-          unzip -p "$APK_FILE" classes3.dex 2>/dev/null | strings | grep -q 'com/kunal/universalvideo/MainActivity' || true
           echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
           echo 'PASS: APK exists and archive integrity is valid'
 
       - name: Upload runtime-fixed APK
         uses: actions/upload-artifact@v4
         with:
-          name: KUNAL-Universal-Video-APK-runtime-fixed-v2
+          name: KUNAL-Universal-Video-APK-runtime-fixed-v3
           path: ${{ env.APK_FILE }}
           if-no-files-found: error
 
@@ -165,7 +228,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "runtime-v2-${GITHUB_RUN_NUMBER}" "$APK_FILE" --title "KUNAL Universal Video Runtime Fixed V2 #${GITHUB_RUN_NUMBER}" --notes "Runtime AppCompat theme is enforced before MainActivity.onCreate; source and APK integrity checks passed."
+          gh release create "runtime-v3-${GITHUB_RUN_NUMBER}" "$APK_FILE" --title "KUNAL Universal Video Runtime Fixed V3 #${GITHUB_RUN_NUMBER}" --notes "Fixed actual runtime crash: ScrollView-family layout now has exactly one direct child; AppCompat startup theme is enforced before MainActivity.onCreate; source and APK integrity checks passed."
 
       - name: Failure evidence
         if: always()
@@ -180,17 +243,17 @@ jobs:
             echo "Project: ${PROJECT_DIR:-unknown}"
             echo "App: ${APP_DIR:-unknown}"
             echo
-            grep -E -i '(FAILURE:|What went wrong:|Execution failed|Could not resolve|Unresolved reference|error:|Caused by:|Exception|manifest merger failed)' gradle-build.log 2>/dev/null | tail -n 160 || true
-            tail -n 160 gradle-build.log 2>/dev/null || true
-          } > ci-results/runtime-v2-diagnosis.md
+            grep -E -i '(FAILURE:|What went wrong:|Execution failed|Could not resolve|Unresolved reference|error:|Caused by:|Exception|manifest merger failed|ScrollView)' gradle-build.log 2>/dev/null | tail -n 200 || true
+            tail -n 200 gradle-build.log 2>/dev/null || true
+          } > ci-results/runtime-v3-diagnosis.md
 
       - name: Upload failure evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-v2-diagnostics-${{ github.run_number }}
+          name: runtime-v3-diagnostics-${{ github.run_number }}
           path: |
-            ci-results/runtime-v2-diagnosis.md
+            ci-results/runtime-v3-diagnosis.md
             gradle-build.log
             gradle-wrapper.log
           if-no-files-found: ignore
