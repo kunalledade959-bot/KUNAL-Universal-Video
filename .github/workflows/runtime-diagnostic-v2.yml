@@ -177,3 +177,5 @@ jobs:
           git add ci-results/runtime-latest.md
           git diff --cached --quiet || git commit -m "ci: publish runtime verification result"
           git push
+
+# Verification trigger: run the corrected emulator test on the current build branch.
