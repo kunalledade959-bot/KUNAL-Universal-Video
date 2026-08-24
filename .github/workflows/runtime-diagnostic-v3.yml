@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   runtime-diagnostic:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 40
     steps:
       - name: Checkout repository
@@ -43,7 +43,6 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -52,6 +51,7 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
+          cache-disabled: true
 
       - name: Build diagnostic APK
         shell: bash
@@ -67,6 +67,24 @@ jobs:
           echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
           echo "BUILD_PASS" > "$GITHUB_WORKSPACE/runtime-status.txt"
 
+      - name: Reclaim runner disk before emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== DISK BEFORE CLEANUP ==="
+          df -h /
+          rm -rf "$HOME/.gradle/caches" "$HOME/.gradle/wrapper/dists" "$HOME/.gradle/daemon" "$HOME/.gradle/native" "$HOME/.gradle/workers" || true
+          sudo rm -rf "$ANDROID_HOME/system-images" "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools" "$ANDROID_HOME/platform-tools" "$ANDROID_HOME/emulator" "$ANDROID_HOME/tools" || true
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* || true
+          rm -rf "$HOME/.android/avd" || true
+          mkdir -p "$HOME/.android/avd"
+          echo "=== DISK AFTER CLEANUP ==="
+          df -h /
+          FREE_MB="$(df -Pm / | awk 'NR==2 {print $4}')"
+          echo "FREE_MB=$FREE_MB"
+          test "$FREE_MB" -ge 11000
+
       - name: Enable KVM correctly on Linux runner
         shell: bash
         run: |
@@ -78,7 +96,7 @@ jobs:
           echo "=== KVM DEVICE ==="
           ls -l /dev/kvm || true
           echo "=== EMULATOR ACCELERATION CHECK ==="
-          "$ANDROID_HOME/emulator/emulator" -accel-check || true
+          "$ANDROID_HOME/emulator/emulator" -accel-check 2>/dev/null || true
           echo "=== CPU ==="
           nproc
 
@@ -89,11 +107,11 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: pixel_2
-          cores: 4
-          ram-size: 4096M
-          heap-size: 512M
-          disk-size: 8G
-          avd-name: kunal-runtime-v3-api30
+          cores: 2
+          ram-size: 2048M
+          heap-size: 384M
+          disk-size: 10G
+          avd-name: kunal-runtime-v4-api30
           force-avd-creation: true
           emulator-boot-timeout: 900
           emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none
@@ -103,7 +121,7 @@ jobs:
           disable-linux-hw-accel: auto
           channel: stable
           pre-emulator-launch-script: |
-            set -euxo pipefail
+            set -eu
             echo "=== KVM FINAL CHECK ==="
             ls -l /dev/kvm || true
             "$ANDROID_HOME/emulator/emulator" -accel-check || true
@@ -111,7 +129,7 @@ jobs:
             adb kill-server || true
             adb start-server
           script: |
-            set -uo pipefail
+            set -u
             echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"
             APK="$GITHUB_WORKSPACE/${APK_FILE#${GITHUB_WORKSPACE}/}"
             adb start-server
@@ -163,7 +181,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-diagnostic-v3-logs
+          name: runtime-diagnostic-v4-logs
           path: |
             startup-result.txt
             runtime-log.txt
@@ -178,13 +196,13 @@ jobs:
           set -u
           STATUS="$(cat runtime-status.txt 2>/dev/null || echo UNKNOWN)"
           {
-            echo "# Runtime Verification V3"
+            echo "# Runtime Verification V4"
             echo
             echo "Commit: $GITHUB_SHA"
             echo "Run: $GITHUB_RUN_ID"
             echo "Status: $STATUS"
-            echo "Runner: ubuntu-latest"
-            echo "Emulator: API 30 / Pixel 2 / x86_64"
+            echo "Runner: ubuntu-22.04"
+            echo "Emulator: API 30 / Pixel 2 / x86_64 / 10G userdata"
             echo
             case "$STATUS" in
               RUNTIME_STARTUP_SURVIVED) echo "PASS: APK installed and launcher process remained alive after startup." ;;
@@ -197,5 +215,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add ci-results/runtime-v3-latest.md
-          git diff --cached --quiet || git commit -m "ci: use canonical KVM setup for runtime verification"
+          git diff --cached --quiet || git commit -m "ci: fix emulator userdata space and shell verification"
           git push
