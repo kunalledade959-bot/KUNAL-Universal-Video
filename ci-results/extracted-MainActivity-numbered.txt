@@ -1,0 +1,173 @@
+# Exact extracted MainActivity source
+
+Source: verification-package/KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE/android-controller/app/src/main/java/com/kunal/universalvideo/MainActivity.kt
+
+     1	package com.kunal.universalvideo
+     2	
+     3	import android.app.Activity
+     4	import android.content.Intent
+     5	import android.os.Build
+     6	import android.os.Bundle
+     7	import android.provider.Settings
+     8	import android.widget.AdapterView
+     9	import android.widget.ArrayAdapter
+    10	import android.widget.Button
+    11	import android.widget.Spinner
+    12	import android.widget.TextView
+    13	import androidx.activity.result.contract.ActivityResultContracts
+    14	import androidx.appcompat.app.AppCompatActivity
+    15	import java.util.UUID
+    16	import java.io.File
+    17	
+    18	class MainActivity : AppCompatActivity() {
+    19	
+    20	    fun saveFinishedVideoToGallery(videoPath:String, displayName:String="Kunal_Video") {
+    21	        val result=GalleryExporter.saveMp4(this,File(videoPath),displayName)
+    22	        status.text=if(result.ok) "Video saved to Gallery" else "Gallery save failed: ${result.message}"
+    23	    }
+    24	
+    25	
+    26	    companion object { const val PREFS = "kuv"; const val TARGET = "target_package"; const val SESSION = "session_id" }
+    27	    private lateinit var status: TextView
+    28	    private var bridge: LocalBridgeService? = null
+    29	    private var target = ""
+    30	    private var sessionId = ""
+    31	
+    32	    private val captureLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    33	        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+    34	            val intent = Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.START)
+    35	                .putExtra(ScreenCaptureService.CODE, result.resultCode).putExtra(ScreenCaptureService.DATA, result.data)
+    36	            try {
+    37	                if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+    38	                status.text = "Recording start requested"
+    39	            } catch (e: Exception) { status.text = "Recording start failed: ${e.message ?: e.javaClass.simpleName}" }
+    40	        } else status.text = "Recording permission cancelled"
+    41	    }
+    42	
+    43	    override fun onCreate(savedInstanceState: Bundle?) {
+    44	        super.onCreate(savedInstanceState)
+    45	        setContentView(R.layout.activity_main)
+    46	        val capabilityAudit = CapabilityManager.audit(this)
+    47	        val missingRequired = capabilityAudit.filter { it.required && it.state != "GRANTED" && it.state != "CONFIGURED" }
+    48	
+    49	        status = findViewById(R.id.status)
+    50	        if (missingRequired.isNotEmpty()) {
+    51	            status.text = "Setup required: " + missingRequired.joinToString(", ") { it.label }
+    52	        }
+    53	        val errorOverlay = findViewById<android.view.View>(R.id.errorOverlay)
+    54	        val errorDetails = findViewById<android.widget.TextView>(R.id.errorDetails)
+    55	        val repairCodeInput = findViewById<android.widget.EditText>(R.id.repairCodeInput)
+    56	        val repairCodeButton = findViewById<android.widget.Button>(R.id.repairCodeButton)
+    57	        val retryRepairButton = findViewById<android.widget.Button>(R.id.retryRepairButton)
+    58	
+    59	        fun showRepairScreen(health: SelfRepairManager.Health) {
+    60	            errorOverlay.visibility = android.view.View.VISIBLE
+    61	            errorDetails.text = buildString {
+    62	                append("Self-check could not complete safely.\n\n")
+    63	                append("Issues:\n")
+    64	                health.issues.forEach { append("• ").append(it).append('\n') }
+    65	                if (health.repairedItems.isNotEmpty()) {
+    66	                    append("\nRepairs attempted:\n")
+    67	                    health.repairedItems.forEach { append("• ").append(it).append('\n') }
+    68	                }
+    69	                append("\nOnly predefined repair codes are accepted. Arbitrary code execution is disabled.")
+    70	            }
+    71	        }
+    72	
+    73	        repairCodeButton.setOnClickListener {
+    74	            val result = SelfRepairManager.applyRepairCode(this, repairCodeInput.text?.toString().orEmpty())
+    75	            if (result.ok) {
+    76	                errorOverlay.visibility = android.view.View.GONE
+    77	                status.text = "Repair completed — self-check passed"
+    78	            } else {
+    79	                errorDetails.text = "REPAIR FAILED\n\n" +
+    80	                    result.issues.joinToString("\n") { "• $it" } +
+    81	                    "\n\nOnly predefined repair codes are supported."
+    82	            }
+    83	        }
+    84	
+    85	        retryRepairButton.setOnClickListener {
+    86	            val result = SelfRepairManager.initialize(this)
+    87	            if (result.ok) {
+    88	                errorOverlay.visibility = android.view.View.GONE
+    89	                status.text = "Self-check passed"
+    90	            } else {
+    91	                showRepairScreen(result)
+    92	            }
+    93	        }
+    94	
+    95	
+    96	        // Capability checks run before normal operation; Android special-consent flows remain user-controlled.
+    97	        if (Build.VERSION.SDK_INT >= 33 &&
+    98	            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+    99	            CapabilityManager.requestNotifications(this)
+   100	        }
+   101	        val selfHeal = SelfRepairManager.initialize(this)
+   102	        if (selfHeal.ok) {
+   103	            status.text = if (selfHeal.repaired) {
+   104	                "Self-repair completed — controller starting"
+   105	            } else {
+   106	                "Self-check passed — controller starting"
+   107	            }
+   108	        } else {
+   109	            showRepairScreen(selfHeal)
+   110	        }
+   111	        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+   112	        sessionId = prefs.getString(SESSION, null) ?: UUID.randomUUID().toString().also { prefs.edit().putString(SESSION, it).apply() }
+   113	        target = prefs.getString(TARGET, "") ?: ""
+   114	        UniversalAccessibilityService.targetPackage = target
+   115	        loadApps(prefs)
+   116	
+   117	        findViewById<Button>(R.id.connect).setOnClickListener {
+   118	            val health = SelfRepairManager.initialize(this)
+   119	            if (!health.ok) {
+   120	                status.text = "Self-check blocked connect: ${health.issues.joinToString("; ")}"
+   121	            } else if (target.isBlank()) status.text = "Select target APK first"
+   122	            else if (bridge?.prepareTarget(target) == true) status.text = "Bridge ready: ${bridge?.localAddress()}:${LocalBridgeService.PORT} — pair with code ${bridge?.currentPairingCode()}"
+   123	            else status.text = "Selected target cannot be launched"
+   124	        }
+   125	        findViewById<Button>(R.id.disconnect).setOnClickListener { bridge?.disconnect(); status.text = "Disconnected" }
+   126	        findViewById<Button>(R.id.permissions).setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+   127	        findViewById<Button>(R.id.openTarget).setOnClickListener { if (target.isBlank()) status.text = "Select target APK first" else if (UniversalAccessibilityService.launchPackage(this, target)) status.text = "Target launched" else status.text = "Target cannot be launched" }
+   128	        findViewById<Button>(R.id.screenRecord).setOnClickListener { requestCapture() }
+   129	        findViewById<Button>(R.id.stopRecord).setOnClickListener { stopRecordingFromBridge() }
+   130	
+   131	        bridge = BridgeHolder.start(this, sessionId) { message -> runOnUiThread { status.text = message } }
+   132	        try {
+   133	            val intent = Intent(this, ControllerBridgeForegroundService::class.java).setAction(ControllerBridgeForegroundService.START)
+   134	            if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+   135	        } catch (e: Exception) {
+   136	            status.text = "Bridge foreground start failed: ${e.message ?: e.javaClass.simpleName}"
+   137	        }
+   138	        status.text = "Bridge started — waiting for pairing :${LocalBridgeService.PORT}"
+   139	        handleIntent(intent)
+   140	    }
+   141	
+   142	    private fun loadApps(prefs: android.content.SharedPreferences) {
+   143	        val spinner = findViewById<Spinner>(R.id.target)
+   144	        val apps = packageManager.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+   145	            .map { it.activityInfo.packageName }.filter { it != packageName }.distinct().sortedBy { label(it).lowercase() }
+   146	        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, apps.map { "${label(it)}\n$it" })
+   147	        val saved = apps.indexOf(target)
+   148	        if (saved >= 0) spinner.setSelection(saved)
+   149	        spinner.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+   150	            override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+   151	            override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+   152	                if (position in apps.indices) { target = apps[position]; prefs.edit().putString(TARGET, target).apply(); UniversalAccessibilityService.targetPackage = target; status.text = "Target selected: $target" }
+   153	            }
+   154	        }
+   155	    }
+   156	    private fun label(pkg: String): String = try { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() } catch (_: Exception) { pkg }
+   157	    private fun handleIntent(intent: Intent?) { if (intent?.scheme == "kunalcontroller") status.text = "Connect request received — choose target, then pair from the controller UI" }
+   158	    override fun onNewIntent(intent: Intent) { super.onNewIntent(intent); handleIntent(intent) }
+   159	    private fun requestCapture() { val manager = getSystemService(android.media.projection.MediaProjectionManager::class.java); captureLauncher.launch(manager.createScreenCaptureIntent()) }
+   160	    fun startRecordingFromBridge() { runOnUiThread { status.text = "Recording requires the phone's screen-capture permission" } }
+   161	    fun stopRecordingFromBridge() {
+   162	        if (ScreenCaptureService.stopCurrent()) status.text = "Stopping recording"
+   163	        else status.text = "No active recording session"
+   164	    }
+   165	    override fun onDestroy() {
+   166	        bridge = null
+   167	        super.onDestroy()
+   168	    }
+   169	}
