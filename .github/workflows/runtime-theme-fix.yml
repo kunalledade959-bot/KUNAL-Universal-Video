@@ -20,7 +20,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract original project
+      - name: Extract and locate the real Android app module
         shell: bash
         run: |
           set -euo pipefail
@@ -28,99 +28,116 @@ jobs:
           rm -rf verification-package
           mkdir -p verification-package
           unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
-          PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
-          test -n "$PROJECT_DIR"
-          test -f "$PROJECT_DIR/app/build.gradle.kts"
-          test -f "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          FOUND=""
+          while IFS= read -r settings; do
+            root="$(dirname "$settings")"
+            while IFS= read -r manifest; do
+              module="$(dirname "$(dirname "$(dirname "$manifest")")")"
+              build=""
+              if [ -f "$module/build.gradle.kts" ]; then build="$module/build.gradle.kts"; fi
+              if [ -z "$build" ] && [ -f "$module/build.gradle" ]; then build="$module/build.gradle"; fi
+              [ -n "$build" ] || continue
+              grep -q '<application\b' "$manifest" || continue
+              main="$(find "$module/src/main" -type f \( -name 'MainActivity.kt' -o -name 'MainActivity.java' \) -print -quit 2>/dev/null || true)"
+              [ -n "$main" ] || continue
+              FOUND="$module"
+              echo "PROJECT_DIR=$root" >> "$GITHUB_ENV"
+              echo "APP_DIR=$module" >> "$GITHUB_ENV"
+              echo "MANIFEST=$manifest" >> "$GITHUB_ENV"
+              echo "APP_BUILD=$build" >> "$GITHUB_ENV"
+              echo "MAIN_ACTIVITY=$main" >> "$GITHUB_ENV"
+              break 2
+            done < <(find "$root" -type f -path '*/src/main/AndroidManifest.xml' -print)
+          done < <(find verification-package -type f -name settings.gradle.kts -print)
+
+          test -n "$FOUND"
+          echo "PASS: actual Android app module located at $APP_DIR"
+          echo "Manifest: $MANIFEST"
+          echo "MainActivity: $MAIN_ACTIVITY"
 
       - name: Apply verified AccessibilityService source
         shell: bash
         run: |
           set -euo pipefail
-          TARGET="$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          TARGET="$APP_DIR/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
           test -s ci-repair/UniversalAccessibilityService.kt
           test -f "$TARGET"
           cp ci-repair/UniversalAccessibilityService.kt "$TARGET"
           cmp -s ci-repair/UniversalAccessibilityService.kt "$TARGET"
 
-      - name: Permanently enforce AppCompat startup theme
+      - name: Permanently enforce AppCompat startup contract on the real app
         shell: bash
         run: |
           set -euo pipefail
-          export PROJECT_DIR
           python3 - <<'PY'
           import os, re
           from pathlib import Path
 
-          root = Path(os.environ['PROJECT_DIR'])
-          app = root / 'app'
-          manifest = app / 'src/main/AndroidManifest.xml'
-          build = app / 'build.gradle.kts'
-          themes = app / 'src/main/res/values/themes.xml'
+          app = Path(os.environ['APP_DIR'])
+          manifest = Path(os.environ['MANIFEST'])
+          build = Path(os.environ['APP_BUILD'])
+          main = Path(os.environ['MAIN_ACTIVITY'])
 
-          main = root / 'app/src/main/java/com/kunal/universalvideo/MainActivity.kt'
-          text = main.read_text(encoding='utf-8')
-          if 'AppCompatActivity' not in text:
-              raise SystemExit('MainActivity is not AppCompatActivity; refusing an unrelated theme change')
+          main_text = main.read_text(encoding='utf-8')
+          if 'AppCompatActivity' not in main_text:
+              raise SystemExit(f'MainActivity is not AppCompatActivity: {main}')
 
-          # Keep the existing project and dependencies; only add AppCompat if it is truly absent.
           gradle = build.read_text(encoding='utf-8')
           if 'androidx.appcompat:appcompat' not in gradle:
-              m = re.search(r'(?m)^dependencies\\s*\\{', gradle)
-              if not m:
-                  raise SystemExit('Could not locate dependencies block in app/build.gradle.kts')
-              pos = m.end()
-              gradle = gradle[:pos] + '\n    implementation("androidx.appcompat:appcompat:1.7.0")' + gradle[pos:]
+              dep = '\n    implementation("androidx.appcompat:appcompat:1.8.0")\n'
+              if re.search(r'(?m)^dependencies\\s*\\{', gradle):
+                  gradle = re.sub(r'(?m)^(dependencies\\s*\\{)', r'\1' + dep, gradle, count=1)
+              else:
+                  gradle += '\n\ndependencies {' + dep + '}\n'
               build.write_text(gradle, encoding='utf-8')
 
-          themes.parent.mkdir(parents=True, exist_ok=True)
+          values = app / 'src/main/res/values'
+          values.mkdir(parents=True, exist_ok=True)
+          themes = values / 'themes.xml'
           themes.write_text('''<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="Theme.KunalUniversalVideo" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n''', encoding='utf-8')
 
-          manifest_text = manifest.read_text(encoding='utf-8')
+          text = manifest.read_text(encoding='utf-8')
           theme = '@style/Theme.KunalUniversalVideo'
 
-          def set_theme_on_tag(match):
+          def add_theme(match):
               tag = match.group(1)
               if re.search(r'android:theme\\s*=\\s*"[^"]*"', tag):
-                  tag = re.sub(r'android:theme\\s*=\\s*"[^"]*"', f'android:theme="{theme}"', tag)
+                  tag = re.sub(r'android:theme\\s*=\\s*"[^"]*"', f'android:theme="{theme}"', tag, count=1)
               else:
                   tag += f' android:theme="{theme}"'
               return '<' + tag + '>'
 
           app_pat = re.compile(r'<application\\b([^>]*)>', re.S)
-          if not app_pat.search(manifest_text):
-              raise SystemExit('No application tag found')
-          manifest_text = app_pat.sub(set_theme_on_tag, manifest_text, count=1)
+          if not app_pat.search(text):
+              raise SystemExit(f'No application tag in actual manifest: {manifest}')
+          text = app_pat.sub(add_theme, text, count=1)
 
-          activity_pat = re.compile(r'<activity\\b(?=[^>]*android:name\\s*=\\s*"(?:[^".]*/)?(?:\\.?MainActivity)"|[^>]*android:name\\s*=\\s*"[^"]*\\.MainActivity")[^>]*>', re.S)
-          if not activity_pat.search(manifest_text):
-              # Fallback: find any activity whose name contains MainActivity.
-              activity_pat = re.compile(r'<activity\\b(?=[^>]*android:name\\s*=\\s*"[^"]*MainActivity")[^>]*>', re.S)
-          if not activity_pat.search(manifest_text):
-              raise SystemExit('MainActivity manifest entry not found')
-          manifest_text = activity_pat.sub(set_theme_on_tag, manifest_text, count=1)
+          activity_pat = re.compile(r'<activity\\b(?=[^>]*android:name\\s*=\\s*"[^"]*MainActivity")[^>]*>', re.S)
+          if not activity_pat.search(text):
+              raise SystemExit(f'MainActivity manifest entry not found in: {manifest}')
+          text = activity_pat.sub(add_theme, text, count=1)
+          manifest.write_text(text, encoding='utf-8')
 
-          manifest.write_text(manifest_text, encoding='utf-8')
-
-          # Fail closed if the compatibility contract is not present.
-          final_manifest = manifest.read_text(encoding='utf-8')
-          if theme not in final_manifest:
-              raise SystemExit('AppCompat theme was not installed in manifest')
+          final = manifest.read_text(encoding='utf-8')
+          if theme not in final:
+              raise SystemExit('AppCompat startup theme was not installed in manifest')
           if 'Theme.AppCompat.Light.NoActionBar' not in themes.read_text(encoding='utf-8'):
               raise SystemExit('AppCompat theme resource was not created')
-          print('PASS: MainActivity/AppCompat theme contract enforced')
+          print('PASS: real app module has AppCompatActivity + matching AppCompat theme')
           PY
 
       - name: Static startup contract audit
         shell: bash
         run: |
           set -euo pipefail
-          grep -q "AppCompatActivity" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/MainActivity.kt"
-          grep -q "Theme.KunalUniversalVideo" "$PROJECT_DIR/app/src/main/AndroidManifest.xml"
-          grep -q "Theme.AppCompat.Light.NoActionBar" "$PROJECT_DIR/app/src/main/res/values/themes.xml"
-          grep -q "androidx.appcompat:appcompat" "$PROJECT_DIR/app/build.gradle.kts"
-          echo "PASS: startup theme audit"
+          grep -q "AppCompatActivity" "$MAIN_ACTIVITY"
+          grep -q "Theme.KunalUniversalVideo" "$MANIFEST"
+          grep -q "Theme.AppCompat.Light.NoActionBar" "$APP_DIR/src/main/res/values/themes.xml"
+          grep -q "androidx.appcompat:appcompat" "$APP_BUILD"
+          grep -q '<application\b' "$MANIFEST"
+          grep -q 'MainActivity' "$MANIFEST"
+          echo "PASS: startup contract audit"
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -152,7 +169,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APK_FILE="$(find "$PROJECT_DIR/app/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          APK_FILE="$(find "$APP_DIR/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit)"
           test -s "$APK_FILE"
           unzip -tq "$APK_FILE"
           echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
@@ -176,6 +193,10 @@ jobs:
             echo "Run: $GITHUB_RUN_ID"
             echo "Commit: $GITHUB_SHA"
             echo "Status: ${{ job.status }}"
+            echo "Project: ${PROJECT_DIR:-unknown}"
+            echo "App module: ${APP_DIR:-unknown}"
+            echo "Manifest: ${MANIFEST:-unknown}"
+            echo "MainActivity: ${MAIN_ACTIVITY:-unknown}"
             echo
             if [ -f gradle-build.log ]; then
               grep -E -i "(FAILURE:|Execution failed|Caused by:|Exception|error:|e: )" gradle-build.log | tail -n 120 || true
