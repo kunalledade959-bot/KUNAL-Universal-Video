@@ -75,13 +75,13 @@ jobs:
       - name: Build Debug APK
         shell: bash
         run: |
-          set -euo pipefail
+          set -o pipefail
           cd "$PROJECT_DIR"
           rm -f ./gradlew ./gradlew.bat
-          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin 2>&1 | tee "$GITHUB_WORKSPACE/gradle-wrapper.log"
           sed -i 's/\r$//' ./gradlew
           chmod +x ./gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
 
       - name: Layer 5 APK artifact verification
         shell: bash
@@ -95,6 +95,7 @@ jobs:
           echo "PASS: L5 APK exists and ZIP integrity is valid"
 
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-APK
@@ -102,6 +103,7 @@ jobs:
           if-no-files-found: error
 
       - name: Publish APK release asset
+        if: success()
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -112,3 +114,52 @@ jobs:
             --title "KUNAL Universal Video APK #${GITHUB_RUN_NUMBER}" \
             --notes "Original-source L1-L5 build artifact from ${GITHUB_SHA}. Runtime verification is separate."
           echo "PASS: APK published as GitHub Release asset $TAG"
+
+      - name: Generate automatic failure diagnosis
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$GITHUB_WORKSPACE/ci-results"
+          STATUS="${{ job.status }}"
+          LOG="$GITHUB_WORKSPACE/gradle-build.log"
+          {
+            echo "# KUNAL Universal Video automatic build diagnosis"
+            echo
+            echo "Run: $GITHUB_RUN_ID"
+            echo "Commit: $GITHUB_SHA"
+            echo "Branch: $GITHUB_REF_NAME"
+            echo "Job status: $STATUS"
+            echo
+            echo "## Detected Gradle error signals"
+            if [ -f "$LOG" ]; then
+              grep -E -i "(FAILURE:|What went wrong:|Execution failed for task|Could not resolve|Could not find|Unresolved reference|e: |error:|Caused by:|Exception|Unsupported class file|requires|manifest merger failed)" "$LOG" | tail -n 120 || true
+              echo
+              echo "## Last 120 log lines"
+              tail -n 120 "$LOG" || true
+            else
+              echo "Gradle build log was not created; failure occurred before Gradle build logging."
+            fi
+          } > "$GITHUB_WORKSPACE/ci-results/latest-build-diagnosis.md"
+
+      - name: Upload automatic failure diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-build-diagnostics-${{ github.run_number }}
+          path: |
+            ci-results/latest-build-diagnosis.md
+            gradle-build.log
+            gradle-wrapper.log
+          if-no-files-found: ignore
+
+      - name: Publish automatic failure diagnosis to repository
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-results/latest-build-diagnosis.md
+          git diff --cached --quiet || git commit -m "ci: publish latest automatic build diagnosis"
+          git push
