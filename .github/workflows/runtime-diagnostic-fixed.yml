@@ -1,4 +1,5 @@
 name: Runtime Crash Diagnostic Fixed
+# V5 trigger: use the proven emulator-based runtime diagnostic; do not modify app startup logic here.
 on:
   workflow_dispatch:
   push:
@@ -64,20 +65,34 @@ jobs:
             adb wait-for-device
             adb logcat -c
             adb install -r "$APK"
-            PACKAGE="$(aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")"
-            ACTIVITY="$(aapt dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")"
+            PACKAGE="$(aapt dump badging "$APK" | sed -n "s/package: name='\\([^']*\\)'.*/\\1/p")"
+            ACTIVITY="$(aapt dump badging "$APK" | sed -n "s/launchable-activity: name='\\([^']*\\)'.*/\\1/p")"
             test -n "$PACKAGE"
             test -n "$ACTIVITY"
             adb shell am force-stop "$PACKAGE" || true
-            adb shell am start -n "$PACKAGE/$ACTIVITY" || true
+            adb shell am start -W -n "$PACKAGE/$ACTIVITY" > startup-result.txt 2>&1 || true
             sleep 10
+            adb logcat -d -v threadtime > runtime-log.txt
+            adb shell dumpsys package "$PACKAGE" > package-dump.txt 2>&1 || true
             echo "===== STARTUP LOG ====="
-            adb logcat -d -v threadtime | grep -E "AndroidRuntime|FATAL EXCEPTION|$PACKAGE|Process:|Caused by:" | tail -n 250 || true
-            echo "===== PROCESS STATE ====="
+            grep -E -A15 -B5 "AndroidRuntime|FATAL EXCEPTION|Process:|Caused by:|Fatal signal|SecurityException|Exception" runtime-log.txt | tail -n 400 || true
+            echo "===== STARTUP RESULT ====="
+            cat startup-result.txt
             PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' | xargs || true)"
             echo "PID=$PID"
             if [ -z "$PID" ]; then
-              echo "RUNTIME_CRASH_CONFIRMED"
+              echo "RUNTIME_CRASH_CONFIRMED" > runtime-status.txt
               exit 1
             fi
-            echo "RUNTIME_STARTUP_SURVIVED"
+            echo "RUNTIME_STARTUP_SURVIVED" > runtime-status.txt
+      - name: Upload runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-diagnostic-v5-logs
+          path: |
+            startup-result.txt
+            runtime-log.txt
+            package-dump.txt
+            runtime-status.txt
+          if-no-files-found: ignore
