@@ -1,3 +1,4 @@
+// CI trigger only: preserve the verified service implementation while starting runtime diagnostics.
 package com.kunal.universalvideo
 
 import android.accessibilityservice.AccessibilityService
