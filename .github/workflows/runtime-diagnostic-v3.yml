@@ -67,6 +67,25 @@ jobs:
           echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
           echo "BUILD_PASS" > "$GITHUB_WORKSPACE/runtime-status.txt"
 
+      - name: Prepare KVM permissions and emulator host
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "=== KVM BEFORE ==="
+          ls -l /dev/kvm || true
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+            echo "KVM permissions changed to 666 for this runner job."
+            test -r /dev/kvm
+            test -w /dev/kvm
+          else
+            echo "KVM device is unavailable; emulator will use software acceleration."
+          fi
+          echo "=== KVM AFTER ==="
+          ls -l /dev/kvm || true
+          echo "=== CPU ==="
+          nproc
+
       - name: Install and launch APK on hardened emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -89,9 +108,9 @@ jobs:
           channel: stable
           pre-emulator-launch-script: |
             set -euxo pipefail
-            echo "=== KVM ==="
-            test -e /dev/kvm
-            ls -l /dev/kvm
+            echo "=== KVM FINAL CHECK ==="
+            ls -l /dev/kvm || true
+            if [ -e /dev/kvm ]; then test -r /dev/kvm && test -w /dev/kvm; fi
             echo "=== AVDs ==="
             "$ANDROID_HOME/emulator/emulator" -list-avds || true
             echo "=== ADB RESET ==="
@@ -101,10 +120,25 @@ jobs:
             set -uo pipefail
             echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"
             APK="$GITHUB_WORKSPACE/${APK_FILE#${GITHUB_WORKSPACE}/}"
+            adb start-server
             adb wait-for-device
-            adb shell settings put global window_animation_scale 0
-            adb shell settings put global transition_animation_scale 0
-            adb shell settings put global animator_duration_scale 0
+            for i in $(seq 1 180); do
+              BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+              DEV="$(adb get-state 2>/dev/null | tr -d '\r' || true)"
+              echo "BOOT_CHECK $i/180 state=$DEV boot=$BOOT"
+              if [ "$DEV" = "device" ] && [ "$BOOT" = "1" ]; then break; fi
+              sleep 5
+            done
+            DEV="$(adb get-state 2>/dev/null | tr -d '\r' || true)"
+            BOOT="$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+            if [ "$DEV" != "device" ] || [ "$BOOT" != "1" ]; then
+              echo "EMULATOR_BOOT_FAILED" > "$GITHUB_WORKSPACE/runtime-status.txt"
+              adb devices -l || true
+              exit 1
+            fi
+            adb shell settings put global window_animation_scale 0 || true
+            adb shell settings put global transition_animation_scale 0 || true
+            adb shell settings put global animator_duration_scale 0 || true
             adb logcat -c
             adb install -r "$APK"
             PACKAGE="$(aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")"
@@ -161,7 +195,7 @@ jobs:
             case "$STATUS" in
               RUNTIME_STARTUP_SURVIVED) echo "PASS: APK installed and launcher process remained alive after startup." ;;
               RUNTIME_CRASH_CONFIRMED) echo "FAIL: APK installed but launcher process was not alive after startup." ;;
-              EMULATOR_STEP_STARTED) echo "INFRA_FAIL: emulator boot did not reach runtime script completion." ;;
+              EMULATOR_BOOT_FAILED|EMULATOR_STEP_STARTED) echo "INFRA_FAIL: emulator did not reach a healthy Android boot state." ;;
               BUILD_PASS) echo "INFRA_FAIL: APK built but emulator verification did not complete." ;;
               *) echo "INCONCLUSIVE: inspect workflow diagnostics." ;;
             esac
@@ -169,5 +203,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add ci-results/runtime-v3-latest.md
-          git diff --cached --quiet || git commit -m "ci: publish runtime v3 result"
+          git diff --cached --quiet || git commit -m "ci: harden v3 emulator KVM and boot verification"
           git push
