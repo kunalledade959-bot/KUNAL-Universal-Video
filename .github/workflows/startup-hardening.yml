@@ -1,0 +1,101 @@
+name: Hardened Android Startup Verification
+
+on:
+  push:
+    paths:
+      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+      - "ci-repair/UniversalAccessibilityService.kt"
+      - ".github/workflows/startup-hardening.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  hardened-startup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract project and repair known broken source
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d package
+          PROJECT_DIR="$(find package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          MANIFEST="$(find "$PROJECT_DIR/app/src/main" -type f -name AndroidManifest.xml -print -quit)"
+          test -f "$MANIFEST"
+          TARGET="$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          if [ -f ci-repair/UniversalAccessibilityService.kt ]; then cp ci-repair/UniversalAccessibilityService.kt "$TARGET"; fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build clean debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
+
+      - name: Install and launch on Android 11 emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: default
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -uo pipefail
+            adb wait-for-device
+            adb logcat -c
+            adb install -r "$GITHUB_WORKSPACE/${APK_FILE#*/}"
+            PACKAGE="$(aapt dump badging "$GITHUB_WORKSPACE/${APK_FILE#*/}" | sed -n "s/package: name='\([^']*\)'.*/\1/p")"
+            ACTIVITY="$(aapt dump badging "$GITHUB_WORKSPACE/${APK_FILE#*/}" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")"
+            echo "PACKAGE=$PACKAGE"
+            echo "ACTIVITY=$ACTIVITY"
+            test -n "$PACKAGE"
+            test -n "$ACTIVITY"
+            adb shell am force-stop "$PACKAGE" || true
+            adb shell am start -n "$PACKAGE/$ACTIVITY"
+            sleep 12
+            echo "===== ANDROID RUNTIME ====="
+            adb logcat -d -v threadtime | grep -E "AndroidRuntime|FATAL EXCEPTION|Process:|Caused by:|$PACKAGE" | tail -n 300 || true
+            PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+            test -n "$PID"
+            if adb logcat -d | grep -q "FATAL EXCEPTION"; then exit 1; fi
+            echo "RUNTIME_STARTUP_PASS pid=$PID"
+
+      - name: Publish only after runtime startup PASS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="verified-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" "$APK_FILE" --title "KUNAL Universal Video - Runtime Verified #${GITHUB_RUN_NUMBER}" --notes "Built and launched successfully on Android API 30 emulator."
