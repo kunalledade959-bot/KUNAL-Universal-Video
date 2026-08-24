@@ -1,0 +1,173 @@
+name: Runtime Crash Diagnostic V3
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+      - "ci-repair/UniversalAccessibilityService.kt"
+      - ".github/workflows/runtime-diagnostic-v3.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  runtime-diagnostic:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Initialize self-report
+        shell: bash
+        run: |
+          set -u
+          mkdir -p ci-results
+          printf '# Runtime Verification\nStatus: IN_PROGRESS\n' > ci-results/runtime-v3-latest.md
+          echo "EMULATOR_STEP_NOT_STARTED" > runtime-status.txt
+
+      - name: Extract project and apply verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
+          PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          TARGET="$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          cp ci-repair/UniversalAccessibilityService.kt "$TARGET"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
+          echo "BUILD_PASS" > "$GITHUB_WORKSPACE/runtime-status.txt"
+
+      - name: Install and launch APK on hardened emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 8G
+          avd-name: kunal-runtime-v3-api30
+          force-avd-creation: true
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none
+          disable-animations: true
+          disable-spellchecker: true
+          enable-hw-keyboard: false
+          disable-linux-hw-accel: false
+          channel: stable
+          pre-emulator-launch-script: |
+            set -euxo pipefail
+            echo "=== KVM ==="
+            test -e /dev/kvm
+            ls -l /dev/kvm
+            echo "=== AVDs ==="
+            "$ANDROID_HOME/emulator/emulator" -list-avds || true
+            echo "=== ADB RESET ==="
+            adb kill-server || true
+            adb start-server
+          script: |
+            set -uo pipefail
+            echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"
+            APK="$GITHUB_WORKSPACE/${APK_FILE#${GITHUB_WORKSPACE}/}"
+            adb wait-for-device
+            adb shell settings put global window_animation_scale 0
+            adb shell settings put global transition_animation_scale 0
+            adb shell settings put global animator_duration_scale 0
+            adb logcat -c
+            adb install -r "$APK"
+            PACKAGE="$(aapt dump badging "$APK" | sed -n "s/package: name='\([^']*\)'.*/\1/p")"
+            ACTIVITY="$(aapt dump badging "$APK" | sed -n "s/launchable-activity: name='\([^']*\)'.*/\1/p")"
+            echo "PACKAGE=$PACKAGE"
+            echo "ACTIVITY=$ACTIVITY"
+            test -n "$PACKAGE"
+            test -n "$ACTIVITY"
+            adb shell am force-stop "$PACKAGE" || true
+            adb shell am start -W -n "$PACKAGE/$ACTIVITY" > startup-result.txt 2>&1 || true
+            sleep 10
+            adb logcat -d -v threadtime > runtime-log.txt
+            adb shell dumpsys package "$PACKAGE" > package-dump.txt 2>&1 || true
+            echo "===== STARTUP RESULT ====="
+            cat startup-result.txt
+            echo "===== CRASH LOG ====="
+            grep -E -A12 -B5 "AndroidRuntime|FATAL EXCEPTION|Process:|Caused by:|Fatal signal|SecurityException|Exception" runtime-log.txt | tail -n 400 || true
+            echo "===== PROCESS STATE ====="
+            PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+            echo "$PID"
+            if [ -z "$PID" ]; then
+              echo "RUNTIME_CRASH_CONFIRMED" > "$GITHUB_WORKSPACE/runtime-status.txt"
+              exit 1
+            fi
+            echo "RUNTIME_STARTUP_SURVIVED" > "$GITHUB_WORKSPACE/runtime-status.txt"
+
+      - name: Upload runtime diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-diagnostic-v3-logs
+          path: |
+            startup-result.txt
+            runtime-log.txt
+            package-dump.txt
+            runtime-status.txt
+          if-no-files-found: ignore
+
+      - name: Publish self-report
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          STATUS="$(cat runtime-status.txt 2>/dev/null || echo UNKNOWN)"
+          {
+            echo "# Runtime Verification V3"
+            echo
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_RUN_ID"
+            echo "Status: $STATUS"
+            echo "Runner: ubuntu-22.04"
+            echo "Emulator: API 30 / Pixel 2 / x86_64"
+            echo
+            case "$STATUS" in
+              RUNTIME_STARTUP_SURVIVED) echo "PASS: APK installed and launcher process remained alive after startup." ;;
+              RUNTIME_CRASH_CONFIRMED) echo "FAIL: APK installed but launcher process was not alive after startup." ;;
+              EMULATOR_STEP_STARTED) echo "INFRA_FAIL: emulator boot did not reach runtime script completion." ;;
+              BUILD_PASS) echo "INFRA_FAIL: APK built but emulator verification did not complete." ;;
+              *) echo "INCONCLUSIVE: inspect workflow diagnostics." ;;
+            esac
+          } > ci-results/runtime-v3-latest.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-results/runtime-v3-latest.md
+          git diff --cached --quiet || git commit -m "ci: publish runtime v3 result"
+          git push
