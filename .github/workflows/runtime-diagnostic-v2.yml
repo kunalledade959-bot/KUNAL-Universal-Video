@@ -9,7 +9,7 @@ on:
       - ".github/workflows/runtime-diagnostic-v2.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   runtime-diagnostic:
@@ -18,6 +18,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Initialize self-report
+        shell: bash
+        run: |
+          set -u
+          mkdir -p ci-results
+          cat > ci-results/runtime-latest.md <<'EOF'
+          # Runtime Verification
+          Status: IN_PROGRESS
+          EOF
+          echo "EMULATOR_STEP_NOT_STARTED" > runtime-status.txt
       - name: Extract project and apply verified repair
         shell: bash
         run: |
@@ -52,17 +62,24 @@ jobs:
           APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
           test -s "$APK_FILE"
           echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
+          echo "BUILD_PASS" > "$GITHUB_WORKSPACE/runtime-status.txt"
       - name: Install and launch APK on Android emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 30
           arch: x86_64
           target: google_apis
+          profile: pixel_2
+          cores: 2
+          ram-size: 2048M
+          heap-size: 512M
           force-avd-creation: true
-          emulator-options: -no-window -no-audio -no-boot-anim
+          wipe-data: true
+          emulator-options: -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect
           disable-animations: true
           script: |
             set -uo pipefail
+            echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"
             APK="$GITHUB_WORKSPACE/${APK_FILE#${GITHUB_WORKSPACE}/}"
             adb wait-for-device
             adb shell settings put global window_animation_scale 0
@@ -89,10 +106,10 @@ jobs:
             PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
             echo "$PID"
             if [ -z "$PID" ]; then
-              echo "RUNTIME_CRASH_CONFIRMED"
+              echo "RUNTIME_CRASH_CONFIRMED" > "$GITHUB_WORKSPACE/runtime-status.txt"
               exit 1
             fi
-            echo "RUNTIME_STARTUP_SURVIVED"
+            echo "RUNTIME_STARTUP_SURVIVED" > "$GITHUB_WORKSPACE/runtime-status.txt"
       - name: Upload runtime diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -102,6 +119,40 @@ jobs:
             startup-result.txt
             runtime-log.txt
             package-dump.txt
+            runtime-status.txt
           if-no-files-found: ignore
-
-# Trigger a fresh runtime verification after the V2 diagnostic path was corrected.
+      - name: Publish self-report to repository
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          STATUS="$(cat runtime-status.txt 2>/dev/null || echo UNKNOWN)"
+          {
+            echo "# Runtime Verification"
+            echo
+            echo "Commit: $GITHUB_SHA"
+            echo "Run: $GITHUB_RUN_ID"
+            echo "Status: $STATUS"
+            echo "Time (UTC): $(date -u '+%Y-%m-%d %H:%M:%S')"
+            echo
+            if [ -f startup-result.txt ]; then
+              echo "## Startup result"
+              cat startup-result.txt
+            fi
+            echo
+            echo "## Interpretation"
+            case "$STATUS" in
+              RUNTIME_STARTUP_SURVIVED) echo "PASS: APK installed and launcher process remained alive after startup." ;;
+              RUNTIME_CRASH_CONFIRMED) echo "FAIL: APK installed but launcher process was not alive after startup." ;;
+              EMULATOR_STEP_STARTED) echo "INFRA_FAIL: emulator action started but did not reach the runtime script completion." ;;
+              BUILD_PASS) echo "INFRA_FAIL: APK built, but emulator verification did not start/finish." ;;
+              *) echo "INCONCLUSIVE: inspect the workflow artifact/logs." ;;
+            esac
+          } > ci-results/runtime-latest.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ci-results/runtime-latest.md
+          git diff --cached --quiet || git commit -m "ci: publish runtime verification result"
+          git push
