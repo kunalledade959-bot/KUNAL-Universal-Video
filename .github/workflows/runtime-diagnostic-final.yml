@@ -56,7 +56,9 @@ jobs:
           ./gradlew :app:assembleDebug --no-daemon --stacktrace
           APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
           test -s "$APK_FILE"
-          echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
+          cp "$APK_FILE" "$RUNNER_TEMP/kunal-runtime-app-debug.apk"
+          test -s "$RUNNER_TEMP/kunal-runtime-app-debug.apk"
+          echo "APK_FILE=$RUNNER_TEMP/kunal-runtime-app-debug.apk" >> "$GITHUB_ENV"
 
       - name: Reclaim runner disk
         shell: bash
@@ -66,8 +68,16 @@ jobs:
           sudo apt-get clean || true
           sudo rm -rf /var/lib/apt/lists/* || true
           rm -rf "$HOME/.android/avd" || true
+          # Free the checked-out source package after the APK is safely copied.
+          rm -rf "$GITHUB_WORKSPACE/verification-package" || true
+          rm -f "$GITHUB_WORKSPACE/KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip" || true
           mkdir -p "$HOME/.android/avd"
-          test "$(df -Pm / | awk 'NR==2 {print $4}')" -ge 11000
+          echo "=== FREE SPACE AFTER PROJECT CLEANUP ==="
+          df -h /
+          FREE_MB="$(df -Pm / | awk 'NR==2 {print $4}')"
+          echo "FREE_MB=$FREE_MB"
+          test "$FREE_MB" -ge 11000
+          test -s "$APK_FILE"
 
       - name: Launch APK and capture exact runtime evidence
         uses: reactivecircus/android-emulator-runner@v2
