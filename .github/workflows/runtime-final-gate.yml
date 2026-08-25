@@ -15,7 +15,7 @@ permissions:
 jobs:
   runtime-final-gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -155,7 +155,9 @@ jobs:
           arch: x86_64
           target: google_apis
           force-avd-creation: true
-          emulator-options: -no-window -no-audio -no-boot-anim
+          emulator-boot-timeout: 1200
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off
+          disable-linux-hw-accel: true
           disable-animations: true
           script: |
             set -uo pipefail
@@ -164,11 +166,12 @@ jobs:
             ACT='com.kunal.universalvideo.MainActivity'
             mkdir -p "$GITHUB_WORKSPACE/runtime-final-gate"
             adb wait-for-device
+            adb shell getprop sys.boot_completed | grep -q 1
             adb shell pm uninstall "$PKG" >/dev/null 2>&1 || true
             adb logcat -c
             adb install "$APK" > "$GITHUB_WORKSPACE/runtime-final-gate/install.txt" 2>&1
             adb shell am start -W -n "$PKG/$ACT" > "$GITHUB_WORKSPACE/runtime-final-gate/start.txt" 2>&1 || true
-            sleep 8
+            sleep 12
             adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-final-gate/logcat.txt" 2>&1 || true
             adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/runtime-final-gate/activity.txt" 2>&1 || true
             adb shell dumpsys package "$PKG" > "$GITHUB_WORKSPACE/runtime-final-gate/package.txt" 2>&1 || true
