@@ -193,6 +193,7 @@ jobs:
           arch: x86_64
           target: google_apis
           force-avd-creation: true
+          disk-size: 5G
           emulator-boot-timeout: 1200
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off
           disable-linux-hw-accel: true
