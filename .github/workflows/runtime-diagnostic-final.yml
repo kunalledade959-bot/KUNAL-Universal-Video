@@ -1,0 +1,105 @@
+name: Runtime Crash Diagnostic FINAL
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+      - "ci-repair/UniversalAccessibilityService.kt"
+      - ".github/workflows/runtime-diagnostic-final.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-diagnostic-final:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract project and apply verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
+          PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          TARGET="$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          cp ci-repair/UniversalAccessibilityService.kt "$TARGET"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+          cache-disabled: true
+
+      - name: Build diagnostic APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          sed -i 's/\r$//' gradlew
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
+          APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          echo "APK_FILE=$PWD/$APK_FILE" >> "$GITHUB_ENV"
+
+      - name: Reclaim runner disk
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$HOME/.gradle/caches" "$HOME/.gradle/wrapper/dists" "$HOME/.gradle/daemon" "$HOME/.gradle/native" "$HOME/.gradle/workers" || true
+          sudo apt-get clean || true
+          sudo rm -rf /var/lib/apt/lists/* || true
+          rm -rf "$HOME/.android/avd" || true
+          mkdir -p "$HOME/.android/avd"
+          test "$(df -Pm / | awk 'NR==2 {print $4}')" -ge 11000
+
+      - name: Launch APK and capture exact runtime evidence
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          cores: 2
+          ram-size: 2048M
+          heap-size: 384M
+          disk-size: 10G
+          avd-name: kunal-runtime-final-api30
+          force-avd-creation: true
+          emulator-boot-timeout: 900
+          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none
+          disable-animations: true
+          disable-spellchecker: true
+          enable-hw-keyboard: false
+          disable-linux-hw-accel: auto
+          channel: stable
+          script: >-
+            bash -lc 'set -u; APK="$APK_FILE"; PACKAGE=com.kunal.universalvideo; echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"; adb wait-for-device; adb install -r "$APK"; ACTIVITY="$(adb shell cmd package resolve-activity --brief "$PACKAGE" | tail -1 | tr -d "\r")"; echo "PACKAGE=$PACKAGE"; echo "ACTIVITY=$ACTIVITY"; test -n "$ACTIVITY"; adb shell am force-stop "$PACKAGE" || true; adb logcat -c; adb shell am start -W -n "$ACTIVITY" > startup-result.txt 2>&1 || true; sleep 10; adb logcat -d -v threadtime > runtime-log.txt; adb shell dumpsys package "$PACKAGE" > package-dump.txt 2>&1 || true; echo "===== STARTUP RESULT ====="; cat startup-result.txt; echo "===== CRASH EVIDENCE ====="; grep -E -A20 -B10 "AndroidRuntime|FATAL EXCEPTION|Process:|Caused by:|Fatal signal|SecurityException|Exception" runtime-log.txt | tail -n 500 || true; PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d "\r")"; echo "PID=$PID"; if [ -z "$PID" ]; then echo "RUNTIME_CRASH_CONFIRMED" > "$GITHUB_WORKSPACE/runtime-status.txt"; exit 1; fi; echo "RUNTIME_STARTUP_SURVIVED" > "$GITHUB_WORKSPACE/runtime-status.txt"'
+
+      - name: Upload exact runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-diagnostic-final-evidence
+          path: |
+            startup-result.txt
+            runtime-log.txt
+            package-dump.txt
+            runtime-status.txt
+          if-no-files-found: ignore
