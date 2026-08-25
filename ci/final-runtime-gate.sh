@@ -53,7 +53,9 @@ adb shell settings put secure enabled_accessibility_services "$SERVICE"
 adb shell settings put secure accessibility_enabled 1
 
 adb shell cmd package resolve-activity --brief "$PKG" > "$OUT/resolve.txt" 2>&1
-grep -q "$ACT" "$OUT/resolve.txt"
+# resolve-activity commonly prints either the fully-qualified activity or
+# the package-relative form (com.example/.MainActivity). Accept both.
+grep -Eq '(^|/)MainActivity$' "$OUT/resolve.txt"
 
 adb shell am start -W -n "$PKG/$ACT" > "$OUT/start-1.txt" 2>&1
 grep -q 'Status: ok' "$OUT/start-1.txt"
