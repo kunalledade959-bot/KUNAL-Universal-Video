@@ -53,11 +53,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          export APP_ROOT="$PROJECT_DIR/app"
           python3 - <<'PY'
+          import os
           import re
           from pathlib import Path
 
-          app = Path("$PROJECT_DIR/app")
+          app = Path(os.environ["APP_ROOT"])
           manifest = app / "src/main/AndroidManifest.xml"
           build = app / "build.gradle.kts"
           main = app / "src/main/java/com/kunal/universalvideo/MainActivity.kt"
@@ -68,8 +70,6 @@ jobs:
               if not p.is_file():
                   raise SystemExit(f"required startup file missing: {p}")
 
-          # Root cause from the verified bug report: MainActivity is AppCompatActivity,
-          # so its startup theme must be an AppCompat theme before super.onCreate().
           s = main.read_text(encoding="utf-8")
           if not re.search(r"\bimport\s+androidx\.appcompat\.app\.AppCompatActivity\b", s):
               s = re.sub(
@@ -131,7 +131,6 @@ jobs:
           x = re.sub(activity, force_theme, x, count=1, flags=re.S)
           manifest.write_text(x, encoding="utf-8")
 
-          # Independent source-level gates: fail closed if any part of the contract is missing.
           final_main = main.read_text(encoding="utf-8")
           final_build = build.read_text(encoding="utf-8")
           final_manifest = manifest.read_text(encoding="utf-8")
