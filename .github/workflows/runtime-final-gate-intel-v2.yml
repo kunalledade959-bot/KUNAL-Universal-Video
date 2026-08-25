@@ -12,6 +12,9 @@ on:
 permissions:
   contents: read
 
+env:
+  RUNTIME_WORKSPACE: ${{ github.workspace }}
+
 jobs:
   final-runtime-gate:
     runs-on: macos-15-intel
@@ -28,7 +31,7 @@ jobs:
           rm -rf verification-package
           mkdir -p verification-package
           unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
-          PROJECT_DIR="$(find "$GITHUB_WORKSPACE/verification-package" -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          PROJECT_DIR="$(find "$RUNTIME_WORKSPACE/verification-package" -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
           test -n "$PROJECT_DIR"
           PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
           APP_DIR="$PROJECT_DIR/app"
@@ -47,10 +50,10 @@ jobs:
         run: |
           set -euo pipefail
           TARGET="$APP_DIR/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
-          REPAIR="$GITHUB_WORKSPACE/ci-repair/UniversalAccessibilityService.kt"
+          REPAIR="$RUNTIME_WORKSPACE/ci-repair/UniversalAccessibilityService.kt"
           test -s "$TARGET"
           test -s "$REPAIR"
-          cp "$TARGET" "$GITHUB_WORKSPACE/UniversalAccessibilityService.before-repair.kt"
+          cp "$TARGET" "$RUNTIME_WORKSPACE/UniversalAccessibilityService.before-repair.kt"
           cp "$REPAIR" "$TARGET"
           cmp -s "$TARGET" "$REPAIR"
           echo "SERVICE REPAIR: PASS"
@@ -128,15 +131,15 @@ jobs:
           cd "$PROJECT_DIR"
           gradle :wrapper --gradle-version 8.9 --distribution-type bin
           chmod +x gradlew
-          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$RUNTIME_WORKSPACE/gradle-build.log"
           APK_FILE="$(find "$PROJECT_DIR" -type f -name '*.apk' -print | sort | head -n 1)"
           test -s "$APK_FILE"
           echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
           echo "FOUND APK: $APK_FILE"
           AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
-          "$AAPT" dump badging "$APK_FILE" > "$GITHUB_WORKSPACE/aapt-badging.txt"
-          grep -q "package: name='com.kunal.universalvideo'" "$GITHUB_WORKSPACE/aapt-badging.txt"
-          grep -q "launchable-activity: name='com.kunal.universalvideo.MainActivity'" "$GITHUB_WORKSPACE/aapt-badging.txt"
+          "$AAPT" dump badging "$APK_FILE" > "$RUNTIME_WORKSPACE/aapt-badging.txt"
+          grep -q "package: name='com.kunal.universalvideo'" "$RUNTIME_WORKSPACE/aapt-badging.txt"
+          grep -q "launchable-activity: name='com.kunal.universalvideo.MainActivity'" "$RUNTIME_WORKSPACE/aapt-badging.txt"
           echo "APK BUILD + IDENTITY: PASS"
 
       - name: Intel Android emulator smoke gate
@@ -160,7 +163,10 @@ jobs:
             PKG='com.kunal.universalvideo'
             ACT='com.kunal.universalvideo.MainActivity'
             SERVICE="$PKG/com.kunal.universalvideo.UniversalAccessibilityService"
-            OUT="$GITHUB_WORKSPACE/runtime-final-gate"
+            OUT="$RUNTIME_WORKSPACE/runtime-final-gate"
+            printf 'RUNTIME_WORKSPACE=%s\n' "$RUNTIME_WORKSPACE"
+            printf 'OUT=%s\n' "$OUT"
+            test -n "$RUNTIME_WORKSPACE"
             mkdir -p "$OUT"
             adb wait-for-device
             for i in $(seq 1 60); do
