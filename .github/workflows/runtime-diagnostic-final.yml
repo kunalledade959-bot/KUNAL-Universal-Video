@@ -14,7 +14,7 @@ permissions:
 jobs:
   runtime-diagnostic-final:
     runs-on: ubuntu-22.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -91,15 +91,15 @@ jobs:
           disk-size: 6G
           avd-name: kunal-runtime-final-api30
           force-avd-creation: true
-          emulator-boot-timeout: 900
-          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect -camera-back none -camera-front none
+          emulator-boot-timeout: 1200
+          emulator-options: -no-window -no-snapshot -no-audio -no-boot-anim -gpu swiftshader_indirect -accel off -camera-back none -camera-front none
           disable-animations: true
           disable-spellchecker: true
           enable-hw-keyboard: false
-          disable-linux-hw-accel: auto
+          disable-linux-hw-accel: true
           channel: stable
           script: >-
-            bash -lc 'set -u; APK="$APK_FILE"; PACKAGE=com.kunal.universalvideo; echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"; adb wait-for-device; adb install -r "$APK"; ACTIVITY="$(adb shell cmd package resolve-activity --brief "$PACKAGE" | tail -1 | tr -d "\r")"; echo "PACKAGE=$PACKAGE"; echo "ACTIVITY=$ACTIVITY"; test -n "$ACTIVITY"; adb shell am force-stop "$PACKAGE" || true; adb logcat -c; adb shell am start -W -n "$ACTIVITY" > "$GITHUB_WORKSPACE/startup-result.txt" 2>&1 || true; sleep 10; adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-log.txt"; adb shell dumpsys package "$PACKAGE" > "$GITHUB_WORKSPACE/package-dump.txt" 2>&1 || true; echo "===== STARTUP RESULT ====="; cat "$GITHUB_WORKSPACE/startup-result.txt"; echo "===== CRASH EVIDENCE ====="; grep -E -A20 -B10 "AndroidRuntime|FATAL EXCEPTION|Process:|Caused by:|Fatal signal|SecurityException|Exception" "$GITHUB_WORKSPACE/runtime-log.txt" | tail -n 500 || true; PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d "\r")"; echo "PID=$PID"; if [ -z "$PID" ]; then echo "RUNTIME_CRASH_CONFIRMED" > "$GITHUB_WORKSPACE/runtime-status.txt"; exit 1; fi; echo "RUNTIME_STARTUP_SURVIVED" > "$GITHUB_WORKSPACE/runtime-status.txt"'
+            bash -lc 'set -u; APK="$APK_FILE"; PACKAGE=com.kunal.universalvideo; echo "EMULATOR_STEP_STARTED" > "$GITHUB_WORKSPACE/runtime-status.txt"; adb wait-for-device; adb shell getprop sys.boot_completed | grep -q 1; adb install -r "$APK"; ACTIVITY="$(adb shell cmd package resolve-activity --brief "$PACKAGE" | tail -1 | tr -d "\r")"; echo "PACKAGE=$PACKAGE"; echo "ACTIVITY=$ACTIVITY"; test -n "$ACTIVITY"; adb shell am force-stop "$PACKAGE" || true; adb logcat -c; adb shell am start -W -n "$ACTIVITY" > "$GITHUB_WORKSPACE/startup-result.txt" 2>&1 || true; sleep 12; adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-log.txt"; adb shell dumpsys package "$PACKAGE" > "$GITHUB_WORKSPACE/package-dump.txt" 2>&1 || true; echo "===== STARTUP RESULT ====="; cat "$GITHUB_WORKSPACE/startup-result.txt"; echo "===== CRASH EVIDENCE ====="; grep -E -A30 -B10 "AndroidRuntime|FATAL EXCEPTION|Process:|Caused by:|Fatal signal|SecurityException|Exception|Theme.AppCompat" "$GITHUB_WORKSPACE/runtime-log.txt" | tail -n 700 || true; PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d "\r")"; echo "PID=$PID"; if [ -z "$PID" ]; then echo "RUNTIME_CRASH_CONFIRMED" > "$GITHUB_WORKSPACE/runtime-status.txt"; exit 1; fi; echo "RUNTIME_STARTUP_SURVIVED" > "$GITHUB_WORKSPACE/runtime-status.txt"'
 
       - name: Upload exact runtime evidence
         if: always()
