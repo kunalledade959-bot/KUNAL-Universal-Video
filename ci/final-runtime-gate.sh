@@ -13,7 +13,7 @@ printf 'OUT=%s\nAPK=%s\n' "$OUT" "$APK"
 test -s "$APK"
 
 adb wait-for-device
-for i in $(seq 1 60); do
+for i in $(seq 1 90); do
   if [ "$(adb get-state 2>/dev/null || true)" = device ]; then
     break
   fi
@@ -25,7 +25,27 @@ adb shell getprop sys.boot_completed | grep -q 1
 adb shell pm uninstall "$PKG" >/dev/null 2>&1 || true
 adb logcat -c
 
-adb install "$APK" > "$OUT/install.txt" 2>&1
+# Android package verification can time out on hosted emulator runners.
+# Disable ADB/package verification for this isolated CI emulator and use a
+# non-streamed install so the package verifier does not block installation.
+adb shell settings put global package_verifier_enable 0 || true
+adb shell settings put global verifier_verify_adb_installs 0 || true
+adb shell settings put global package_verifier_user_consent -1 || true
+
+if ! adb install --no-streaming "$APK" > "$OUT/install.txt" 2>&1; then
+  echo 'FIRST INSTALL FAILED; RETRYING AFTER ADB RESET' | tee -a "$OUT/install.txt"
+  adb kill-server || true
+  adb start-server
+  adb wait-for-device
+  for i in $(seq 1 60); do
+    if [ "$(adb get-state 2>/dev/null || true)" = device ]; then break; fi
+    sleep 2
+  done
+  adb shell settings put global package_verifier_enable 0 || true
+  adb shell settings put global verifier_verify_adb_installs 0 || true
+  adb install --no-streaming "$APK" >> "$OUT/install.txt" 2>&1
+fi
+
 grep -q '^Success' "$OUT/install.txt"
 
 echo "$SERVICE" > "$OUT/service.txt"
