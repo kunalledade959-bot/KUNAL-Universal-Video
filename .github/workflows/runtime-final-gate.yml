@@ -108,6 +108,27 @@ jobs:
           print('ABSOLUTE STARTUP THEME CONTRACT: PASS')
           PY
 
+      - name: Capture exact Kotlin compiler target before build
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$APP_DIR/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          test -f "$TARGET"
+          echo '=== UniversalAccessibilityService.kt line count ==='
+          wc -l "$TARGET"
+          echo '=== UniversalAccessibilityService.kt lines 1-25 ==='
+          nl -ba "$TARGET" | sed -n '1,25p'
+          echo '=== UniversalAccessibilityService.kt line 18 length ==='
+          python3 - "$TARGET" <<'PY'
+          import sys
+          from pathlib import Path
+          p=Path(sys.argv[1])
+          lines=p.read_text(encoding='utf-8').splitlines()
+          if len(lines) >= 18:
+              print(len(lines[17]))
+              print(repr(lines[17]))
+          PY
+
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
