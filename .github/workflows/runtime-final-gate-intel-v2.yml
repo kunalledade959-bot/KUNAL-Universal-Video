@@ -1,0 +1,230 @@
+name: Runtime Final Gate - Intel V2
+
+on:
+  push:
+    branches: [chroma-toon-7layer-build]
+    paths:
+      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+      - "ci-repair/UniversalAccessibilityService.kt"
+      - ".github/workflows/runtime-final-gate-intel-v2.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  final-runtime-gate:
+    runs-on: macos-15-intel
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Extract and normalize paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          unzip -tq KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip
+          rm -rf verification-package
+          mkdir -p verification-package
+          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
+          PROJECT_DIR="$(find "$GITHUB_WORKSPACE/verification-package" -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+          test -n "$PROJECT_DIR"
+          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+          APP_DIR="$PROJECT_DIR/app"
+          test -f "$APP_DIR/build.gradle.kts"
+          test -f "$APP_DIR/src/main/AndroidManifest.xml"
+          test -f "$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+          echo "MANIFEST=$APP_DIR/src/main/AndroidManifest.xml" >> "$GITHUB_ENV"
+          echo "MAIN_ACTIVITY=$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt" >> "$GITHUB_ENV"
+          echo "APP_BUILD=$APP_DIR/build.gradle.kts" >> "$GITHUB_ENV"
+          echo "NORMALIZED PATHS: PASS"
+
+      - name: Apply verified service repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$APP_DIR/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          REPAIR="$GITHUB_WORKSPACE/ci-repair/UniversalAccessibilityService.kt"
+          test -s "$TARGET"
+          test -s "$REPAIR"
+          cp "$TARGET" "$GITHUB_WORKSPACE/UniversalAccessibilityService.before-repair.kt"
+          cp "$REPAIR" "$TARGET"
+          cmp -s "$TARGET" "$REPAIR"
+          echo "SERVICE REPAIR: PASS"
+
+      - name: Apply startup contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          app=Path(os.environ['APP_DIR'])
+          main=Path(os.environ['MAIN_ACTIVITY'])
+          build=Path(os.environ['APP_BUILD'])
+          manifest=Path(os.environ['MANIFEST'])
+          theme='@style/KunalRuntimeTheme'
+          s=main.read_text()
+          if not re.search(r'(?m)^\s*import\s+androidx\.appcompat\.app\.AppCompatActivity\s*$',s):
+              m=re.search(r'(?m)^package\s+[^\n]+\n',s); assert m
+              s=s[:m.end()]+'\nimport androidx.appcompat.app.AppCompatActivity\n'+s[m.end():]
+          s=re.sub(r'\bclass\s+MainActivity\s*:\s*(?:android\.app\.)?Activity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
+          s=re.sub(r'\bclass\s+MainActivity\s*:\s*ComponentActivity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
+          assert re.search(r'\bclass\s+MainActivity\s*:\s*AppCompatActivity\s*\(',s)
+          if 'setTheme(R.style.KunalRuntimeTheme)' not in s:
+              m=re.search(r'(?m)^(\s*)override\s+fun\s+onCreate\s*\(',s); assert m
+              b=s.find('{',m.end()); assert b>=0
+              s=s[:b+1]+'\n'+m.group(1)+'    setTheme(R.style.KunalRuntimeTheme)'+s[b+1:]
+          assert s.find('setTheme(R.style.KunalRuntimeTheme)') < s.find('super.onCreate')
+          main.write_text(s)
+          g=build.read_text()
+          if 'androidx.appcompat:appcompat' not in g:
+              m=re.search(r'(?m)^\s*dependencies\s*\{',g); assert m
+              p=g.find('\n',m.start())+1
+              g=g[:p]+'    implementation("androidx.appcompat:appcompat:1.7.0")\n'+g[p:]
+              build.write_text(g)
+          values=app/'src/main/res/values'; values.mkdir(parents=True,exist_ok=True)
+          (values/'kunal_runtime_theme.xml').write_text('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n<style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n')
+          x=manifest.read_text()
+          def theme_tag(m):
+              t=m.group(0)
+              if 'android:theme=' in t:
+                  return re.sub(r'android:theme\s*=\s*"[^"]*"',f'android:theme="{theme}"',t,count=1)
+              return t[:-1]+f' android:theme="{theme}">'
+          x=re.sub(r'<application\b[^>]*>',theme_tag,x,count=1,flags=re.S)
+          x=re.sub(r'<activity\b(?=[^>]*android:name\s*=\s*"[^"]*MainActivity")[^>]*>',theme_tag,x,count=1,flags=re.S)
+          manifest.write_text(x)
+          assert 'AppCompatActivity' in main.read_text()
+          assert 'androidx.appcompat:appcompat:1.7.0' in build.read_text()
+          assert 'android:theme="@style/KunalRuntimeTheme"' in manifest.read_text()
+          print('STARTUP CONTRACT: PASS')
+          PY
+
+      - name: Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: tools platform-tools
+          accept-android-sdk-licenses: true
+
+      - name: Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build and locate APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          gradle :wrapper --gradle-version 8.9 --distribution-type bin
+          chmod +x gradlew
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
+          APK_FILE="$(find "$PROJECT_DIR" -type f -name '*.apk' -print | sort | head -n 1)"
+          test -s "$APK_FILE"
+          echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
+          echo "FOUND APK: $APK_FILE"
+          AAPT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/aapt"
+          "$AAPT" dump badging "$APK_FILE" > "$GITHUB_WORKSPACE/aapt-badging.txt"
+          grep -q "package: name='com.kunal.universalvideo'" "$GITHUB_WORKSPACE/aapt-badging.txt"
+          grep -q "launchable-activity: name='com.kunal.universalvideo.MainActivity'" "$GITHUB_WORKSPACE/aapt-badging.txt"
+          echo "APK BUILD + IDENTITY: PASS"
+
+      - name: Intel Android emulator smoke gate
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_5
+          cores: 4
+          ram-size: 4096M
+          heap-size: 512M
+          disk-size: 5G
+          force-avd-creation: true
+          emulator-boot-timeout: 1200
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-load -no-snapshot-save -gpu swiftshader_indirect -camera-back none -camera-front none
+          disable-animations: true
+          enable-hw-keyboard: true
+          script: |
+            set -euo pipefail
+            PKG='com.kunal.universalvideo'
+            ACT='com.kunal.universalvideo.MainActivity'
+            SERVICE="$PKG/com.kunal.universalvideo.UniversalAccessibilityService"
+            OUT="$GITHUB_WORKSPACE/runtime-final-gate"
+            mkdir -p "$OUT"
+            adb wait-for-device
+            for i in $(seq 1 60); do
+              [ "$(adb get-state 2>/dev/null || true)" = device ] && break
+              sleep 2
+            done
+            test "$(adb get-state)" = device
+            adb shell getprop sys.boot_completed | grep -q 1
+            adb shell pm uninstall "$PKG" >/dev/null 2>&1 || true
+            adb logcat -c
+            adb install "$APK_FILE" > "$OUT/install.txt" 2>&1
+            grep -q '^Success' "$OUT/install.txt"
+            adb shell settings put secure enabled_accessibility_services "$SERVICE"
+            adb shell settings put secure accessibility_enabled 1
+            adb shell cmd package resolve-activity --brief "$PKG" > "$OUT/resolve.txt" 2>&1
+            grep -q "$ACT" "$OUT/resolve.txt"
+            adb shell am start -W -n "$PKG/$ACT" > "$OUT/start-1.txt" 2>&1
+            grep -q 'Status: ok' "$OUT/start-1.txt"
+            sleep 10
+            adb shell pidof "$PKG" > "$OUT/pid-1.txt"
+            test -s "$OUT/pid-1.txt"
+            adb shell uiautomator dump /sdcard/kunal-ui.xml >/dev/null 2>&1
+            adb shell cat /sdcard/kunal-ui.xml > "$OUT/ui.xml" 2>&1
+            test -s "$OUT/ui.xml"
+            grep -q 'hierarchy' "$OUT/ui.xml"
+            adb shell dumpsys accessibility > "$OUT/accessibility.txt" 2>&1
+            grep -q 'UniversalAccessibilityService' "$OUT/accessibility.txt"
+            adb shell dumpsys package "$PKG" > "$OUT/package.txt" 2>&1
+            grep -q 'UniversalAccessibilityService' "$OUT/package.txt"
+            adb shell am force-stop "$PKG"
+            adb shell am start -W -n "$PKG/$ACT" > "$OUT/start-2.txt" 2>&1
+            grep -q 'Status: ok' "$OUT/start-2.txt"
+            sleep 5
+            adb shell pidof "$PKG" > "$OUT/pid-2.txt"
+            test -s "$OUT/pid-2.txt"
+            adb logcat -d -v threadtime > "$OUT/logcat.txt" 2>&1
+            if grep -Eq 'FATAL EXCEPTION: main|Unable to start activity ComponentInfo\{com\.kunal\.universalvideo/com\.kunal\.universalvideo\.MainActivity\}|Process: com\.kunal\.universalvideo.*FATAL EXCEPTION' "$OUT/logcat.txt"; then
+              echo 'FINAL MOBILE GATE: FAIL'
+              grep -E 'AndroidRuntime|FATAL EXCEPTION|Unable to start activity|Caused by:|MainActivity' "$OUT/logcat.txt" | tail -n 250 || true
+              exit 1
+            fi
+            echo 'FINAL MOBILE GATE: PASS'
+            echo 'INSTALL=PASS'
+            echo 'LAUNCH=PASS'
+            echo 'UI_RENDER=PASS'
+            echo 'ACCESSIBILITY_SERVICE=PASS'
+            echo 'RESTART=PASS'
+            echo 'CRASH_SCAN=PASS'
+
+      - name: Upload final APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-FINAL-RUNTIME-GATED-INTEL-V2
+          path: ${{ env.APK_FILE }}
+          if-no-files-found: error
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-final-intel-v2-evidence-${{ github.run_number }}
+          path: |
+            aapt-badging.txt
+            gradle-build.log
+            UniversalAccessibilityService.before-repair.kt
+            runtime-final-gate/*
+          if-no-files-found: ignore
