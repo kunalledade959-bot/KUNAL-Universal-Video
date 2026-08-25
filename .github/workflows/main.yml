@@ -49,6 +49,99 @@ jobs:
           cmp -s "$REPAIR_SOURCE" "$TARGET"
           echo "PASS: canonical verified AccessibilityService source installed"
 
+      - name: Apply permanent AppCompat startup contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          app = Path("$PROJECT_DIR/app")
+          manifest = app / "src/main/AndroidManifest.xml"
+          build = app / "build.gradle.kts"
+          main = app / "src/main/java/com/kunal/universalvideo/MainActivity.kt"
+          values = app / "src/main/res/values"
+          theme = "@style/KunalRuntimeTheme"
+
+          for p in (manifest, build, main):
+              if not p.is_file():
+                  raise SystemExit(f"required startup file missing: {p}")
+
+          # Root cause from the verified bug report: MainActivity is AppCompatActivity,
+          # so its startup theme must be an AppCompat theme before super.onCreate().
+          s = main.read_text(encoding="utf-8")
+          if not re.search(r"\bimport\s+androidx\.appcompat\.app\.AppCompatActivity\b", s):
+              s = re.sub(
+                  r"(?m)^package\s+[^\n]+\n",
+                  lambda m: m.group(0) + "\nimport androidx.appcompat.app.AppCompatActivity\n",
+                  s,
+                  count=1,
+              )
+          s = re.sub(
+              r"\bclass\s+MainActivity\s*:\s*(?:android\.app\.)?Activity\s*\(",
+              "class MainActivity : AppCompatActivity(",
+              s,
+              count=1,
+          )
+          s = re.sub(
+              r"\bclass\s+MainActivity\s*:\s*ComponentActivity\s*\(",
+              "class MainActivity : AppCompatActivity(",
+              s,
+              count=1,
+          )
+          if not re.search(r"class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(", s):
+              raise SystemExit("MainActivity is not AppCompatActivity")
+
+          if "setTheme(R.style.KunalRuntimeTheme)" not in s:
+              m = re.search(r"(?m)^(\s*)super\.onCreate\s*\(", s)
+              if not m:
+                  raise SystemExit("MainActivity super.onCreate() not found")
+              s = s[:m.start()] + m.group(1) + "setTheme(R.style.KunalRuntimeTheme)\n" + s[m.start():]
+          if s.index("setTheme(R.style.KunalRuntimeTheme)") > s.index("super.onCreate"):
+              raise SystemExit("runtime theme guard is after super.onCreate")
+          main.write_text(s, encoding="utf-8")
+
+          g = build.read_text(encoding="utf-8")
+          if "androidx.appcompat:appcompat" not in g:
+              m = re.search(r"(?m)^\s*dependencies\s*\{", g)
+              if not m:
+                  raise SystemExit("dependencies block not found")
+              p = g.find("\n", m.start()) + 1
+              g = g[:p] + '    implementation("androidx.appcompat:appcompat:1.7.0")\n' + g[p:]
+              build.write_text(g, encoding="utf-8")
+
+          values.mkdir(parents=True, exist_ok=True)
+          (values / "kunal_runtime_theme.xml").write_text(
+              '''<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n''',
+              encoding="utf-8",
+          )
+
+          x = manifest.read_text(encoding="utf-8")
+          def force_theme(m):
+              tag = m.group(0)
+              if re.search(r'android:theme\s*=\s*"[^"]*"', tag):
+                  return re.sub(r'android:theme\s*=\s*"[^"]*"', f'android:theme="{theme}"', tag, count=1)
+              return tag[:-1] + f' android:theme="{theme}">'
+
+          x = re.sub(r"<application\b[^>]*>", force_theme, x, count=1, flags=re.S)
+          activity = r'<activity\b(?=[^>]*android:name\s*=\s*"[^"]*MainActivity")[^>]*>'
+          if not re.search(activity, x, re.S):
+              raise SystemExit("MainActivity manifest entry not found")
+          x = re.sub(activity, force_theme, x, count=1, flags=re.S)
+          manifest.write_text(x, encoding="utf-8")
+
+          # Independent source-level gates: fail closed if any part of the contract is missing.
+          final_main = main.read_text(encoding="utf-8")
+          final_build = build.read_text(encoding="utf-8")
+          final_manifest = manifest.read_text(encoding="utf-8")
+          assert re.search(r"class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(", final_main)
+          assert final_main.index("setTheme(R.style.KunalRuntimeTheme)") < final_main.index("super.onCreate")
+          assert "androidx.appcompat:appcompat" in final_build
+          assert final_manifest.count(theme) >= 2
+          print("PASS: permanent AppCompat startup contract installed")
+          PY
+
       - name: Layer 1-4 source and static audit
         shell: bash
         run: |
@@ -68,6 +161,8 @@ jobs:
           grep -q "ScreenCaptureService" "$MANIFEST"
           grep -q "MediaProjectionManager" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/ScreenCaptureService.kt"
           grep -q "MediaStore" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/GalleryExporter.kt"
+          grep -q "KunalRuntimeTheme" "$MANIFEST"
+          grep -q "setTheme(R.style.KunalRuntimeTheme)" "$PROJECT_DIR/app/src/main/java/com/kunal/universalvideo/MainActivity.kt"
           echo "PASS: L1-L4 source/static audit"
 
       - name: Set up Java 17
@@ -125,7 +220,7 @@ jobs:
           TAG="apk-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" "$APK_FILE" \
             --title "KUNAL Universal Video APK #${GITHUB_RUN_NUMBER}" \
-            --notes "Original ChromaToon package with canonical verified AccessibilityService source. Runtime verification is separate."
+            --notes "Original ChromaToon package with permanent AppCompat startup contract and canonical verified AccessibilityService source. Runtime emulator verification is separate."
           echo "PASS: APK published as GitHub Release asset $TAG"
 
       - name: Generate automatic failure diagnosis
