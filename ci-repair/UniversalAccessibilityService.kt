@@ -1,4 +1,3 @@
-// CI trigger only: preserve the verified service implementation while starting runtime diagnostics.
 package com.kunal.universalvideo
 
 import android.accessibilityservice.AccessibilityService
@@ -15,29 +14,30 @@ class UniversalAccessibilityService : AccessibilityService() {
         var instance: UniversalAccessibilityService? = null
 
         @Volatile
-        var targetPackage = ""
+        var targetPackage: String = ""
 
         @Volatile
-        var targetForeground = false
+        var targetForeground: Boolean = false
 
         @Volatile
-        var isEnabled = false
+        var isEnabled: Boolean = false
 
-        fun launchPackage(c: Context, p: String): Boolean {
-            val i = c.packageManager.getLaunchIntentForPackage(p) ?: return false
-            i.addFlags(
+        fun launchPackage(context: Context, packageName: String): Boolean {
+            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+                ?: return false
+            intent.addFlags(
                 Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
             )
-            c.startActivity(i)
+            context.startActivity(intent)
             return true
         }
 
-        fun clickText(t: String) =
-            instance?.clickTextInternal(t) ?: false
+        fun clickText(text: String): Boolean =
+            instance?.clickTextInternal(text) ?: false
 
-        fun setFocusedText(t: String) =
-            instance?.setTextInternal(t) ?: false
+        fun setFocusedText(text: String): Boolean =
+            instance?.setTextInternal(text) ?: false
     }
 
     override fun onServiceConnected() {
@@ -46,11 +46,11 @@ class UniversalAccessibilityService : AccessibilityService() {
         isEnabled = true
     }
 
-    override fun onAccessibilityEvent(e: AccessibilityEvent?) {
-        val p = e?.packageName?.toString() ?: return
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        val packageName = event?.packageName?.toString() ?: return
 
         targetForeground =
-            targetPackage.isNotBlank() && p == targetPackage
+            targetPackage.isNotBlank() && packageName == targetPackage
 
         runCatching {
             TargetGuideManager.captureUiEvidence(
@@ -62,7 +62,7 @@ class UniversalAccessibilityService : AccessibilityService() {
         runCatching {
             AutonomousWorkflowLearner.discover(
                 applicationContext,
-                p,
+                packageName,
                 rootInActiveWindow
             )
         }
@@ -85,47 +85,39 @@ class UniversalAccessibilityService : AccessibilityService() {
         super.onDestroy()
     }
 
-    private fun clickTextInternal(t: String): Boolean {
-        val r = rootInActiveWindow ?: return false
+    private fun clickTextInternal(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
 
-        for (n in r.findAccessibilityNodeInfosByText(t)) {
-            if (n.isClickable) {
-                return n.performAction(
-                    AccessibilityNodeInfo.ACTION_CLICK
-                )
+        for (node in root.findAccessibilityNodeInfosByText(text)) {
+            if (node.isClickable) {
+                return node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
             }
 
-            var p = n.parent
-            while (p != null) {
-                if (p.isClickable) {
-                    return p.performAction(
-                        AccessibilityNodeInfo.ACTION_CLICK
-                    )
+            var parent = node.parent
+            while (parent != null) {
+                if (parent.isClickable) {
+                    return parent.performAction(AccessibilityNodeInfo.ACTION_CLICK)
                 }
-
-                p = p.parent
+                parent = parent.parent
             }
         }
 
         return false
     }
 
-    private fun setTextInternal(t: String): Boolean {
-        val r = rootInActiveWindow ?: return false
+    private fun setTextInternal(text: String): Boolean {
+        val root = rootInActiveWindow ?: return false
+        val node = root.findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
 
-        val n = r.findFocus(
-            AccessibilityNodeInfo.FOCUS_INPUT
-        ) ?: return false
-
-        val a = Bundle()
-        a.putCharSequence(
+        val arguments = Bundle()
+        arguments.putCharSequence(
             AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
-            t
+            text
         )
 
-        return n.performAction(
+        return node.performAction(
             AccessibilityNodeInfo.ACTION_SET_TEXT,
-            a
+            arguments
         )
     }
 }
