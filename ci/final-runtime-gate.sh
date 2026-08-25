@@ -57,12 +57,29 @@ adb shell cmd package resolve-activity --brief "$PKG" > "$OUT/resolve.txt" 2>&1
 # the package-relative form (com.example/.MainActivity). Accept both.
 grep -Eq '(^|/)MainActivity$' "$OUT/resolve.txt"
 
+# Keep launch diagnostics even when am start or the status assertion fails.
+# The previous gate stopped here without preserving start/logcat evidence.
+set +e
 adb shell am start -W -n "$PKG/$ACT" > "$OUT/start-1.txt" 2>&1
-grep -q 'Status: ok' "$OUT/start-1.txt"
+START_RC=$?
+set -e
+if [ "$START_RC" -ne 0 ] || ! grep -q 'Status: ok' "$OUT/start-1.txt"; then
+  echo "START_1_FAILED rc=$START_RC" | tee "$OUT/start-1-failure.txt"
+  adb shell dumpsys package "$PKG" > "$OUT/package-start-1.txt" 2>&1 || true
+  adb shell dumpsys activity activities > "$OUT/activity-start-1.txt" 2>&1 || true
+  adb logcat -d -v threadtime > "$OUT/logcat-start-1.txt" 2>&1 || true
+  grep -E 'AndroidRuntime|FATAL EXCEPTION|Unable to start activity|Caused by:|MainActivity|SecurityException|Exception' "$OUT/logcat-start-1.txt" | tail -n 250 || true
+  exit 1
+fi
 sleep 10
 
-adb shell pidof "$PKG" > "$OUT/pid-1.txt"
-test -s "$OUT/pid-1.txt"
+adb shell pidof "$PKG" > "$OUT/pid-1.txt" 2>&1
+if ! test -s "$OUT/pid-1.txt"; then
+  echo 'PID_1_FAILED' | tee "$OUT/pid-1-failure.txt"
+  adb shell dumpsys activity activities > "$OUT/activity-pid-1.txt" 2>&1 || true
+  adb logcat -d -v threadtime > "$OUT/logcat-pid-1.txt" 2>&1 || true
+  exit 1
+fi
 
 adb shell uiautomator dump /sdcard/kunal-ui.xml > "$OUT/uiautomator-dump.txt" 2>&1
 adb shell cat /sdcard/kunal-ui.xml > "$OUT/ui.xml" 2>&1
@@ -76,8 +93,15 @@ adb shell dumpsys package "$PKG" > "$OUT/package.txt" 2>&1
 grep -q 'UniversalAccessibilityService' "$OUT/package.txt"
 
 adb shell am force-stop "$PKG"
+set +e
 adb shell am start -W -n "$PKG/$ACT" > "$OUT/start-2.txt" 2>&1
-grep -q 'Status: ok' "$OUT/start-2.txt"
+START2_RC=$?
+set -e
+if [ "$START2_RC" -ne 0 ] || ! grep -q 'Status: ok' "$OUT/start-2.txt"; then
+  echo "START_2_FAILED rc=$START2_RC" | tee "$OUT/start-2-failure.txt"
+  adb logcat -d -v threadtime > "$OUT/logcat-start-2.txt" 2>&1 || true
+  exit 1
+fi
 sleep 5
 adb shell pidof "$PKG" > "$OUT/pid-2.txt"
 test -s "$OUT/pid-2.txt"
