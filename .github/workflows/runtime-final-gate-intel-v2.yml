@@ -145,9 +145,9 @@ jobs:
       - name: Intel Android emulator smoke gate
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 35
+          api-level: 34
           arch: x86_64
-          target: google_apis
+          target: default
           profile: pixel_5
           cores: 4
           ram-size: 4096M
