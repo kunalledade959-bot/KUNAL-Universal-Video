@@ -1,0 +1,59 @@
+name: Runtime Gate Watchdog
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Check and recover runtime gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo '=== RUNTIME WATCHDOG ==='
+          RUNS="$(gh run list --repo "$REPO" --workflow runtime-diagnostic.yml --limit 5 --json databaseId,status,conclusion,createdAt,updatedAt,headSha)"
+          echo "$RUNS"
+
+          if [ "$(echo "$RUNS" | jq 'length')" -eq 0 ]; then
+            echo 'No runtime gate run exists. Starting one.'
+            gh workflow run runtime-diagnostic.yml --repo "$REPO" --ref main
+            exit 0
+          fi
+
+          ID="$(echo "$RUNS" | jq -r '.[0].databaseId')"
+          STATUS="$(echo "$RUNS" | jq -r '.[0].status')"
+          CONCLUSION="$(echo "$RUNS" | jq -r '.[0].conclusion // empty')"
+          UPDATED="$(echo "$RUNS" | jq -r '.[0].updatedAt')"
+          AGE=$(( $(date +%s) - $(date -d "$UPDATED" +%s) ))
+          echo "latest=$ID status=$STATUS conclusion=$CONCLUSION age=${AGE}s"
+
+          if [ "$STATUS" = 'in_progress' ] || [ "$STATUS" = 'queued' ] || [ "$STATUS" = 'waiting' ] || [ "$STATUS" = 'requested' ]; then
+            if [ "$AGE" -gt 3600 ]; then
+              echo 'Runtime gate appears stuck for over 60 minutes. Cancelling and restarting.'
+              gh run cancel "$ID" --repo "$REPO" || true
+              sleep 5
+              gh workflow run runtime-diagnostic.yml --repo "$REPO" --ref main
+            else
+              echo 'Runtime gate is alive; no restart needed.'
+            fi
+            exit 0
+          fi
+
+          if [ "$CONCLUSION" = 'success' ]; then
+            echo 'Runtime gate succeeded. No restart needed.'
+            exit 0
+          fi
+
+          echo "Runtime gate stopped with conclusion=$CONCLUSION. Restarting the full gate."
+          gh workflow run runtime-diagnostic.yml --repo "$REPO" --ref main
