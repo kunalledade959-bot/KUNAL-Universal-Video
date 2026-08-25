@@ -6,6 +6,7 @@ on:
       - chroma-toon-7layer-build
     paths:
       - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+      - "ci-repair/UniversalAccessibilityService.kt"
       - ".github/workflows/runtime-final-gate.yml"
   workflow_dispatch:
 
@@ -39,6 +40,22 @@ jobs:
           echo "MANIFEST=$APP_DIR/src/main/AndroidManifest.xml" >> "$GITHUB_ENV"
           echo "MAIN_ACTIVITY=$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt" >> "$GITHUB_ENV"
           echo "APP_BUILD=$APP_DIR/build.gradle.kts" >> "$GITHUB_ENV"
+
+      - name: Apply verified UniversalAccessibilityService repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$APP_DIR/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
+          REPAIR="$GITHUB_WORKSPACE/ci-repair/UniversalAccessibilityService.kt"
+          test -f "$TARGET"
+          test -s "$REPAIR"
+          cp "$TARGET" "$GITHUB_WORKSPACE/UniversalAccessibilityService.before-repair.kt"
+          cp "$REPAIR" "$TARGET"
+          cmp -s "$TARGET" "$REPAIR"
+          echo "VERIFIED SERVICE REPAIR APPLIED"
+          echo "TARGET=$TARGET"
+          echo "=== repaired source ==="
+          nl -ba "$TARGET" | sed -n '1,220p'
 
       - name: Apply absolute AppCompat startup contract
         shell: bash
@@ -225,5 +242,6 @@ jobs:
             aapt-badging.txt
             gradle-build.log
             gradle-wrapper.log
+            UniversalAccessibilityService.before-repair.kt
             runtime-final-gate/*
           if-no-files-found: ignore
