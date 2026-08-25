@@ -163,11 +163,10 @@ jobs:
             PKG='com.kunal.universalvideo'
             ACT='com.kunal.universalvideo.MainActivity'
             SERVICE="$PKG/com.kunal.universalvideo.UniversalAccessibilityService"
-            OUT="$RUNTIME_WORKSPACE/runtime-final-gate"
-            printf 'RUNTIME_WORKSPACE=%s\n' "$RUNTIME_WORKSPACE"
-            printf 'OUT=%s\n' "$OUT"
-            test -n "$RUNTIME_WORKSPACE"
+            OUT='/tmp/kunal-runtime-final-gate'
+            rm -rf "$OUT"
             mkdir -p "$OUT"
+            printf 'OUT=%s\n' "$OUT"
             adb wait-for-device
             for i in $(seq 1 60); do
               [ "$(adb get-state 2>/dev/null || true)" = device ] && break
@@ -216,7 +215,18 @@ jobs:
             echo 'RESTART=PASS'
             echo 'CRASH_SCAN=PASS'
 
+      - name: Collect runtime evidence
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNTIME_WORKSPACE/runtime-final-gate"
+          if [ -d /tmp/kunal-runtime-final-gate ]; then
+            cp -R /tmp/kunal-runtime-final-gate/. "$RUNTIME_WORKSPACE/runtime-final-gate/"
+          fi
+
       - name: Upload final APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-FINAL-RUNTIME-GATED-INTEL-V2
