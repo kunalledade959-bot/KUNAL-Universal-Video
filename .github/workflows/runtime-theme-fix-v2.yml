@@ -4,28 +4,31 @@ on:
   push:
     paths:
       - ".github/workflows/runtime-theme-fix-v2.yml"
+      - "ci-repair/UniversalAccessibilityService.kt"
+      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
   workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: read
+  contents: read
 
 jobs:
-  build-runtime-crash-capture:
+  runtime-crash-capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Extract proven app
+      - name: Extract exact ChromaToon package
         shell: bash
         run: |
           set -euo pipefail
-          unzip -tq KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip
+          ZIP_FILE="KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
+          test -f "$ZIP_FILE"
+          unzip -tq "$ZIP_FILE"
           rm -rf verification-package
           mkdir -p verification-package
-          unzip -q KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip -d verification-package
+          unzip -q "$ZIP_FILE" -d verification-package
           PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
           APP_DIR="$PROJECT_DIR/app"
           test -f "$APP_DIR/build.gradle.kts"
@@ -33,178 +36,146 @@ jobs:
           test -f "$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
           echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
-          echo "MANIFEST=$APP_DIR/src/main/AndroidManifest.xml" >> "$GITHUB_ENV"
-          echo "APP_BUILD=$APP_DIR/build.gradle.kts" >> "$GITHUB_ENV"
-          echo "MAIN_ACTIVITY=$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt" >> "$GITHUB_ENV"
+          echo "PASS: exact package extracted"
 
-      - name: Snapshot exact MainActivity
+      - name: Apply permanent AppCompat startup contract
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ci-results
-          cp "$MAIN_ACTIVITY" ci-results/extracted-MainActivity.kt
-          nl -ba "$MAIN_ACTIVITY" > ci-results/extracted-MainActivity-numbered.txt
-
-      - name: Install canonical AccessibilityService
-        shell: bash
-        run: |
-          set -euo pipefail
-          TARGET="$APP_DIR/src/main/java/com/kunal/universalvideo/UniversalAccessibilityService.kt"
-          test -s ci-repair/UniversalAccessibilityService.kt
-          cp ci-repair/UniversalAccessibilityService.kt "$TARGET"
-          cmp -s ci-repair/UniversalAccessibilityService.kt "$TARGET"
-
-      - name: Repair only invalid ScrollView structure
-        shell: bash
-        run: |
-          set -euo pipefail
+          export APP_ROOT="$APP_DIR"
           python3 - <<'PY'
           import os
-          import xml.etree.ElementTree as ET
+          import re
           from pathlib import Path
-          app=Path(os.environ['APP_DIR'])
-          res=app/'src/main/res'
-          android='http://schemas.android.com/apk/res/android'
-          ET.register_namespace('android',android)
-          def local(t): return t.rsplit('}',1)[-1]
-          for path in res.rglob('*.xml'):
-              try: tree=ET.parse(path)
-              except ET.ParseError: continue
-              root=tree.getroot(); changed=False
-              for parent in list(root.iter()):
-                  if local(parent.tag) not in {'ScrollView','HorizontalScrollView','NestedScrollView'}: continue
-                  children=list(parent)
-                  if len(children)<=1: continue
-                  wrapper=ET.Element('LinearLayout')
-                  wrapper.set(f'{{{android}}}layout_width','match_parent')
-                  wrapper.set(f'{{{android}}}layout_height','wrap_content')
-                  wrapper.set(f'{{{android}}}orientation','vertical')
-                  for child in children:
-                      parent.remove(child); wrapper.append(child)
-                  parent.append(wrapper); changed=True
-              if changed: tree.write(path,encoding='utf-8',xml_declaration=True)
+
+          app = Path(os.environ["APP_ROOT"])
+          manifest = app / "src/main/AndroidManifest.xml"
+          build = app / "build.gradle.kts"
+          main = app / "src/main/java/com/kunal/universalvideo/MainActivity.kt"
+          values = app / "src/main/res/values"
+          theme = "@style/KunalRuntimeTheme"
+
+          s = main.read_text(encoding="utf-8")
+          if not re.search(r"\bimport\s+androidx\.appcompat\.app\.AppCompatActivity\b", s):
+              s = re.sub(r"(?m)^package\s+[^\n]+\n", lambda m: m.group(0) + "\nimport androidx.appcompat.app.AppCompatActivity\n", s, count=1)
+          s = re.sub(r"\bclass\s+MainActivity\s*:\s*(?:android\.app\.)?Activity\s*\(", "class MainActivity : AppCompatActivity(", s, count=1)
+          s = re.sub(r"\bclass\s+MainActivity\s*:\s*ComponentActivity\s*\(", "class MainActivity : AppCompatActivity(", s, count=1)
+          if not re.search(r"class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(", s):
+              raise SystemExit("MainActivity is not AppCompatActivity")
+          if "setTheme(R.style.KunalRuntimeTheme)" not in s:
+              m = re.search(r"(?m)^(\s*)super\.onCreate\s*\(", s)
+              if not m:
+                  raise SystemExit("super.onCreate not found")
+              s = s[:m.start()] + m.group(1) + "setTheme(R.style.KunalRuntimeTheme)\n" + s[m.start():]
+          if s.index("setTheme(R.style.KunalRuntimeTheme)") > s.index("super.onCreate"):
+              raise SystemExit("theme guard is too late")
+          main.write_text(s, encoding="utf-8")
+
+          g = build.read_text(encoding="utf-8")
+          if "androidx.appcompat:appcompat" not in g:
+              m = re.search(r"(?m)^\s*dependencies\s*\{", g)
+              if not m:
+                  raise SystemExit("dependencies block not found")
+              p = g.find("\n", m.start()) + 1
+              g = g[:p] + '    implementation("androidx.appcompat:appcompat:1.7.0")\n' + g[p:]
+              build.write_text(g, encoding="utf-8")
+
+          values.mkdir(parents=True, exist_ok=True)
+          (values / "kunal_runtime_theme.xml").write_text(
+              '''<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n''',
+              encoding="utf-8",
+          )
+
+          x = manifest.read_text(encoding="utf-8")
+          def force_theme(m):
+              tag = m.group(0)
+              if re.search(r'android:theme\s*=\s*"[^"]*"', tag):
+                  return re.sub(r'android:theme\s*=\s*"[^"]*"', f'android:theme="{theme}"', tag, count=1)
+              return tag[:-1] + f' android:theme="{theme}">'
+          x = re.sub(r"<application\b[^>]*>", force_theme, x, count=1, flags=re.S)
+          activity = r'<activity\b(?=[^>]*android:name\s*=\s*"[^"]*MainActivity")[^>]*>'
+          if not re.search(activity, x, re.S):
+              raise SystemExit("MainActivity manifest entry not found")
+          x = re.sub(activity, force_theme, x, count=1, flags=re.S)
+          manifest.write_text(x, encoding="utf-8")
+
+          assert re.search(r"class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(", main.read_text(encoding="utf-8"))
+          ms = main.read_text(encoding="utf-8")
+          assert ms.index("setTheme(R.style.KunalRuntimeTheme)") < ms.index("super.onCreate")
+          assert "androidx.appcompat:appcompat" in build.read_text(encoding="utf-8")
+          assert manifest.read_text(encoding="utf-8").count(theme) >= 2
+          print("PASS: permanent startup theme contract installed")
           PY
 
-      - name: Enforce AppCompat startup contract
+      - name: Build diagnostic APK
         shell: bash
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import os,re
-          from pathlib import Path
-          app=Path(os.environ['APP_DIR']); manifest=Path(os.environ['MANIFEST']); build=Path(os.environ['APP_BUILD']); main=Path(os.environ['MAIN_ACTIVITY'])
-          theme='@style/KunalRuntimeTheme'
-          s=main.read_text(encoding='utf-8')
-          if not re.search(r'\bimport\s+androidx\.appcompat\.app\.AppCompatActivity\b',s):
-              s=re.sub(r'(?m)^package\s+[^\n]+\n',lambda m:m.group(0)+'\nimport androidx.appcompat.app.AppCompatActivity\n',s,count=1)
-          s=re.sub(r'\bclass\s+MainActivity\s*:\s*(?:android\.app\.)?Activity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
-          s=re.sub(r'\bclass\s+MainActivity\s*:\s*ComponentActivity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
-          if not re.search(r'class\s+MainActivity[^\n]*:\s*AppCompatActivity\s*\(',s): raise SystemExit('MainActivity is not AppCompatActivity')
-          if 'setTheme(R.style.KunalRuntimeTheme)' not in s:
-              m=re.search(r'(?m)^(\s*)super\.onCreate\s*\(',s)
-              if not m: raise SystemExit('super.onCreate not found')
-              s=s[:m.start()]+m.group(1)+'setTheme(R.style.KunalRuntimeTheme)\n'+s[m.start():]
-          if s.index('setTheme(R.style.KunalRuntimeTheme)') > s.index('super.onCreate'): raise SystemExit('theme guard too late')
-          main.write_text(s,encoding='utf-8')
-          g=build.read_text(encoding='utf-8')
-          if 'androidx.appcompat:appcompat' not in g:
-              m=re.search(r'(?m)^\s*dependencies\s*\{',g)
-              if not m: raise SystemExit('dependencies block not found')
-              p=g.find('\n',m.start())+1
-              g=g[:p]+'    implementation("androidx.appcompat:appcompat:1.7.0")\n'+g[p:]
-              build.write_text(g,encoding='utf-8')
-          values=app/'src/main/res/values'; values.mkdir(parents=True,exist_ok=True)
-          (values/'kunal_runtime_theme.xml').write_text('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n<style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n',encoding='utf-8')
-          x=manifest.read_text(encoding='utf-8')
-          def add(m):
-              tag=m.group(0)
-              if re.search(r'android:theme\s*=\s*"[^"]*"',tag): return re.sub(r'android:theme\s*=\s*"[^"]*"',f'android:theme="{theme}"',tag,count=1)
-              return tag[:-1]+f' android:theme="{theme}">'
-          x=re.sub(r'<application\b[^>]*>',add,x,count=1,flags=re.S)
-          x=re.sub(r'<activity\b(?=[^>]*android:name\s*=\s*"[^"]*MainActivity")[^>]*>',add,x,count=1,flags=re.S)
-          manifest.write_text(x,encoding='utf-8')
-          PY
-
-      - name: Add startup crash capture guard
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import os,re
-          from pathlib import Path
-          p=Path(os.environ['MAIN_ACTIVITY']); s=p.read_text(encoding='utf-8')
-          if 'KUNAL_STARTUP_CRASH_CAPTURE_V4' in s:
-              print('PASS: startup crash capture already present'); raise SystemExit(0)
-          marker='override fun onCreate(savedInstanceState: Bundle?) {'
-          if marker not in s: raise SystemExit('MainActivity onCreate signature not found')
-          guard='''override fun onCreate(savedInstanceState: Bundle?) {\n        // KUNAL_STARTUP_CRASH_CAPTURE_V4\n        try {\n            setTheme(R.style.KunalRuntimeTheme)\n            android.util.Log.i("KUNAL_STARTUP", "onCreate entered")\n        } catch (t: Throwable) {\n            android.util.Log.e("KUNAL_STARTUP", "EARLY_STARTUP_FAILURE", t)\n            throw t\n        }\n'''
-          s=s.replace(marker,guard,1)
-          # Protect the rest of onCreate without changing existing application logic.\n          start=s.index(guard)+len(guard)
-          open_count=0; end=None
-          for i in range(start,len(s)):
-              if s[i]=='{': open_count+=1
-              elif s[i]=='}':
-                  if open_count==0: end=i; break
-                  open_count-=1
-          if end is None: raise SystemExit('Could not locate onCreate end')
-          body=s[start:end]
-          indented='\n'.join(('        '+line if line.strip() else line) for line in body.split('\n'))
-          wrapped='''        try {\n'''+indented+'''\n        } catch (t: Throwable) {\n            android.util.Log.e("KUNAL_STARTUP", "STARTUP_FAILURE", t)\n            android.widget.Toast.makeText(this, "Startup error: " + t.javaClass.simpleName, android.widget.Toast.LENGTH_LONG).show()\n            throw t\n        }\n'''
-          s=s[:start]+wrapped+s[end:]
-          p.write_text(s,encoding='utf-8')
-          print('PASS: startup crash capture guard installed')
-          PY
-
-      - name: Set up Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-          cache: gradle
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: tools platform-tools
-
-      - name: Set up Gradle 8.9
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '8.9'
-
-      - name: Build APK
-        shell: bash
-        run: |
-          set -o pipefail
           cd "$PROJECT_DIR"
           gradle :wrapper --gradle-version 8.9 --distribution-type bin 2>&1 | tee "$GITHUB_WORKSPACE/gradle-wrapper.log"
-          chmod +x gradlew
+          sed -i 's/\r$//' ./gradlew
+          chmod +x ./gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
+          APK_FILE="$(find "$APP_DIR/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
+          echo "PASS: diagnostic APK built"
 
-      - name: Verify APK
+      - name: Verify APK startup contract
         shell: bash
         run: |
           set -euo pipefail
-          APK_FILE="$(find "$APP_DIR/build/outputs/apk/debug" -maxdepth 1 -type f -name '*.apk' -print -quit)"
-          test -s "$APK_FILE"
           unzip -tq "$APK_FILE"
-          echo "APK_FILE=$APK_FILE" >> "$GITHUB_ENV"
-          echo 'PASS: APK exists and archive integrity is valid'
+          grep -q "KunalRuntimeTheme" "$APP_DIR/src/main/AndroidManifest.xml"
+          grep -q "setTheme(R.style.KunalRuntimeTheme)" "$APP_DIR/src/main/java/com/kunal/universalvideo/MainActivity.kt"
+          echo "PASS: source startup contract is present in build inputs"
 
-      - name: Upload crash-capture APK
-        uses: actions/upload-artifact@v4
+      - name: Launch APK on Android emulator and capture runtime evidence
+        uses: reactivecircus/android-emulator-runner@v2
         with:
-          name: KUNAL-Universal-Video-APK-crash-capture-v4
-          path: ${{ env.APK_FILE }}
-          if-no-files-found: error
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -uo pipefail
+            mkdir -p "$GITHUB_WORKSPACE/runtime-evidence"
+            adb wait-for-device
+            adb logcat -c
+            adb install -r "$APK_FILE" > "$GITHUB_WORKSPACE/runtime-evidence/install.txt" 2>&1
+            echo "PACKAGE=com.kunal.universalvideo" | tee "$GITHUB_WORKSPACE/runtime-evidence/target.txt"
+            echo "ACTIVITY=com.kunal.universalvideo.MainActivity" | tee -a "$GITHUB_WORKSPACE/runtime-evidence/target.txt"
+            adb shell am force-stop com.kunal.universalvideo || true
+            adb shell am start -W -n com.kunal.universalvideo/com.kunal.universalvideo.MainActivity > "$GITHUB_WORKSPACE/runtime-evidence/am-start.txt" 2>&1 || true
+            sleep 10
+            adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/logcat.txt"
+            adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/runtime-evidence/activity.txt" 2>&1 || true
+            adb shell dumpsys package com.kunal.universalvideo > "$GITHUB_WORKSPACE/runtime-evidence/package.txt" 2>&1 || true
+            echo "===== STARTUP RESULT ====="
+            cat "$GITHUB_WORKSPACE/runtime-evidence/am-start.txt" || true
+            echo "===== CRASH SIGNALS ====="
+            grep -E -i "AndroidRuntime|FATAL EXCEPTION|Unable to start activity|IllegalStateException|Theme.AppCompat|Caused by:|Process: com\.kunal\.universalvideo|KUNAL_STARTUP" "$GITHUB_WORKSPACE/runtime-evidence/logcat.txt" | tail -n 250 || true
+            PID="$(adb shell pidof com.kunal.universalvideo 2>/dev/null | tr -d '\r' || true)"
+            echo "PID=$PID"
+            if grep -E -q "FATAL EXCEPTION|Unable to start activity|IllegalStateException: You need to use a Theme\.AppCompat theme" "$GITHUB_WORKSPACE/runtime-evidence/logcat.txt"; then
+              echo "RUNTIME_CRASH_CONFIRMED"
+              exit 1
+            fi
+            if [ -z "$PID" ]; then
+              echo "RUNTIME_STARTUP_NOT_SURVIVING"
+              exit 1
+            fi
+            echo "RUNTIME_STARTUP_SURVIVED"
 
-      - name: Upload diagnostics
+      - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: runtime-crash-capture-diagnostics-${{ github.run_number }}
+          name: runtime-crash-capture-evidence-${{ github.run_number }}
           path: |
-            ci-results/*
+            runtime-evidence/*
             gradle-build.log
             gradle-wrapper.log
           if-no-files-found: ignore
