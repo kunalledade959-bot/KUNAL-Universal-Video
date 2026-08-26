@@ -5,6 +5,7 @@ on:
   push:
     paths:
       - "*.zip"
+      - "activity_fixed.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
       - ".github/workflows/main.yml"
