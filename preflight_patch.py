@@ -11,6 +11,9 @@ old='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRI
 new='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE)]:write(java/n,d)\n write(java/"MainActivity.kt",Path("activity_fixed.kt").read_text(encoding="utf-8"))'
 if old not in s: raise SystemExit('ACTIVITY overlay target line not found')
 s=s.replace(old,new,1)
-s=s.replace('for stale in [java/"ControllerBridgeForegroundService.kt",java/"SelfRepairManager.kt"]:', 'for stale in [java/"ControllerBridgeForegroundService.kt",java/"SelfRepairManager.kt"]:')
+old2='android=STAGE/"android-controller";write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
+new2='android=STAGE/"android-controller"\n for stale in [android/"app/src/main/java/com/kunal/universalvideo/ControllerBridgeForegroundService.kt",android/"app/src/main/java/com/kunal/universalvideo/SelfRepairManager.kt"]:\n  try: stale.unlink()\n  except FileNotFoundError: pass\n write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
+if old2 not in s: raise SystemExit('BUILD cleanup target line not found')
+s=s.replace(old2,new2,1)
 p.write_text(s,encoding='utf-8')
 print('PRE-FLIGHT PATCH: PASS')
