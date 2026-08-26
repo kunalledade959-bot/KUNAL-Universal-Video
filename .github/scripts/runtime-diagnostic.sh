@@ -9,9 +9,7 @@ if [ ! -s "$APK_FILE" ]; then
   exit 20
 fi
 
-# The build job already passed. Runtime gate must never rebuild or mutate source.
-# The emulator runner installs Android build-tools, but does not add its aapt binary
-# to PATH. Discover aapt explicitly instead of incorrectly reporting AAPT_MISSING.
+# Build has already passed. Runtime must only validate the produced APK.
 AAPT="$(command -v aapt || true)"
 if [ -z "$AAPT" ] && [ -n "${ANDROID_SDK_ROOT:-}" ]; then
   AAPT="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt -perm -111 -print -quit 2>/dev/null || true)"
@@ -31,7 +29,6 @@ set +e
 AAPT_RC=$?
 set -e
 cat "$BADGING"
-
 if [ "$AAPT_RC" -ne 0 ]; then
   echo "APK_BADGING_FAILED rc=$AAPT_RC"
   exit 22
@@ -39,10 +36,8 @@ fi
 
 PACKAGE="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" "$BADGING" | head -n1)"
 ACTIVITY="$(sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" "$BADGING" | head -n1)"
-
 echo "PACKAGE=$PACKAGE"
 echo "ACTIVITY=$ACTIVITY"
-
 if [ -z "$PACKAGE" ] || [ -z "$ACTIVITY" ]; then
   echo "APK_METADATA_INVALID"
   exit 23
@@ -83,33 +78,55 @@ if [ "$INSTALL_RC" -ne 0 ]; then
   exit 31
 fi
 
-set +e
-timeout 30s adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/start.log" 2>&1
-START_RC=$?
-set -e
-sleep 8
-adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/logcat.log" || true
-PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-echo "START_RC=$START_RC PID=$PID"
+launch_and_verify() {
+  local label="$1"
+  local launch_log="$2"
+  local logcat_file="$3"
+  local pid=""
+  local resumed=""
+  local i
 
-if [ "$START_RC" -ne 0 ] || [ -z "$PID" ]; then
+  # Do not use `am start -W`: slow software-emulated runners can make that command
+  # time out even when the application actually starts correctly.
+  set +e
+  timeout 20s adb shell am start -n "$PACKAGE/$ACTIVITY" > "$launch_log" 2>&1
+  local start_rc=$?
+  set -e
+  echo "${label}_START_RC=$start_rc"
+
+  for i in $(seq 1 45); do
+    adb logcat -d -v threadtime > "$logcat_file" 2>&1 || true
+    if grep -Eq 'FATAL EXCEPTION|ANR in|Process: ' "$logcat_file"; then
+      echo "${label}_CRASH_EVIDENCE_FOUND"
+      tail -n 250 "$logcat_file" || true
+      return 1
+    fi
+    pid="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+    resumed="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 -F "$PACKAGE" || true)"
+    if [ -n "$pid" ] || printf '%s' "$resumed" | grep -q "$PACKAGE"; then
+      echo "${label}_RUNNING pid=${pid:-unknown}"
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "${label}_LAUNCH_TIMEOUT"
+  tail -n 250 "$logcat_file" || true
+  return 1
+}
+
+if ! launch_and_verify "START" "$GITHUB_WORKSPACE/runtime-evidence/start.log" "$GITHUB_WORKSPACE/runtime-evidence/logcat.log"; then
   echo "RUNTIME_LAUNCH_FAILED"
-  tail -n 300 "$GITHUB_WORKSPACE/runtime-evidence/logcat.log" || true
   exit 32
 fi
 
 set +e
 adb shell am force-stop "$PACKAGE" >/dev/null 2>&1
-adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/restart.log" 2>&1
-RESTART_RC=$?
 set -e
-sleep 8
-PID2="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-echo "RESTART_RC=$RESTART_RC PID2=$PID2"
+sleep 2
 
-if [ "$RESTART_RC" -ne 0 ] || [ -z "$PID2" ]; then
+if ! launch_and_verify "RESTART" "$GITHUB_WORKSPACE/runtime-evidence/restart.log" "$GITHUB_WORKSPACE/runtime-evidence/restart-logcat.log"; then
   echo "RESTART_CRASH_CONFIRMED"
-  adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/restart-logcat.log" || true
   exit 33
 fi
 
