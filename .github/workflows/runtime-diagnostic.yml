@@ -6,9 +6,14 @@ on:
     paths:
       - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
       - "KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip"
+      - "KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT.zip"
       - ".github/workflows/runtime-diagnostic.yml"
       - ".github/workflows/runtime-watchdog.yml"
       - ".github/scripts/runtime-diagnostic.sh"
+
+concurrency:
+  group: kunal-universal-video-runtime-main
+  cancel-in-progress: false
 
 permissions:
   contents: read
