@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '*/10 * * * *'
   workflow_dispatch:
+  workflow_run:
+    workflows: ["Runtime Crash Diagnostic"]
+    types: [completed]
 
 permissions:
   actions: write
@@ -55,5 +58,5 @@ jobs:
             exit 0
           fi
 
-          echo "Runtime gate stopped with conclusion=$CONCLUSION. Restarting the full gate."
+          echo "Runtime gate stopped with conclusion=$CONCLUSION. Starting a fresh main-branch verification run."
           gh workflow run runtime-diagnostic.yml --repo "$REPO" --ref main
