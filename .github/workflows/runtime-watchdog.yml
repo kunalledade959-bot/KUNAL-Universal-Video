@@ -8,6 +8,10 @@ on:
     workflows: ["Runtime Crash Diagnostic"]
     types: [completed]
 
+concurrency:
+  group: kunal-universal-video-runtime-watchdog
+  cancel-in-progress: false
+
 permissions:
   actions: write
   contents: read
