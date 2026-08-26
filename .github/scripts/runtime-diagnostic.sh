@@ -4,11 +4,41 @@ set -u
 
 cd "$PROJECT_DIR" || exit 1
 
+mkdir -p "$GITHUB_WORKSPACE/runtime-evidence" "$GITHUB_WORKSPACE/final-apk"
+
+# Deterministic preflight: repair only known build-tool compatibility issues before spending emulator time.
+python3 - <<'PY'
+from pathlib import Path
+root = Path('.')
+for p in root.rglob('build.gradle.kts'):
+    s = p.read_text(encoding='utf-8', errors='ignore')
+    changed = False
+    if 'sourceCompatibility = JavaVersion.VERSION_17' not in s:
+        s += '\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n}\n'
+        changed = True
+    if 'jvmToolchain(17)' not in s and ('kotlin' in s.lower() or p.name == 'build.gradle.kts'):
+        s += '\nkotlin {\n    jvmToolchain(17)\n}\n'
+        changed = True
+    if changed:
+        p.write_text(s.rstrip() + '\n', encoding='utf-8')
+
+# Preserve exact source evidence for an AI repair pass. Never treat a label/status string as a real connection.
+main_candidates = list(root.rglob('MainActivity.kt'))
+with open(Path('/tmp/kunal-source-audit.txt'), 'w', encoding='utf-8') as out:
+    out.write('PROJECT=' + str(root.resolve()) + '\n')
+    for p in sorted(root.rglob('*')):
+        if p.is_file() and p.suffix.lower() in {'.kt', '.java', '.xml', '.kts'}:
+            out.write(str(p.relative_to(root)) + '\n')
+    for p in main_candidates:
+        text = p.read_text(encoding='utf-8', errors='ignore')
+        if 'Controller ready' in text and 'R.id.connect' in text:
+            out.write('CONNECTION_PLACEHOLDER_DETECTED=' + str(p) + '\n')
+PY
+cp /tmp/kunal-source-audit.txt "$GITHUB_WORKSPACE/runtime-evidence/source-audit.txt" || true
+
 gradle :wrapper --gradle-version 8.9 --distribution-type bin >/dev/null 2>&1 || true
 sed -i 's/\r$//' gradlew
 chmod +x gradlew
-
-mkdir -p "$GITHUB_WORKSPACE/runtime-evidence" "$GITHUB_WORKSPACE/final-apk"
 
 PACKAGE=""
 ACTIVITY=""
