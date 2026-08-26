@@ -9,7 +9,7 @@ if [ ! -s "$APK_FILE" ]; then
   exit 20
 fi
 
-# Build has already passed. Runtime must only validate the produced APK.
+# Build has already passed. Runtime validates only the produced APK.
 AAPT="$(command -v aapt || true)"
 if [ -z "$AAPT" ] && [ -n "${ANDROID_SDK_ROOT:-}" ]; then
   AAPT="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt -perm -111 -print -quit 2>/dev/null || true)"
@@ -78,6 +78,8 @@ if [ "$INSTALL_RC" -ne 0 ]; then
   exit 31
 fi
 
+echo "INSTALL_PASS"
+
 launch_and_verify() {
   local label="$1"
   local launch_log="$2"
@@ -86,21 +88,25 @@ launch_and_verify() {
   local resumed=""
   local i
 
-  # Do not use `am start -W`: slow software-emulated runners can make that command
-  # time out even when the application actually starts correctly.
+  # Do not use `am start -W`. Software-emulated GitHub runners can be very slow.
+  # Give the shell command enough time, then independently poll for the process/activity.
   set +e
-  timeout 20s adb shell am start -n "$PACKAGE/$ACTIVITY" > "$launch_log" 2>&1
+  timeout 60s adb shell am start -n "$PACKAGE/$ACTIVITY" > "$launch_log" 2>&1
   local start_rc=$?
   set -e
   echo "${label}_START_RC=$start_rc"
 
-  for i in $(seq 1 45); do
+  # Up to 4 minutes of patient polling. A timeout alone is never treated as a crash.
+  for i in $(seq 1 120); do
     adb logcat -d -v threadtime > "$logcat_file" 2>&1 || true
-    if grep -Eq 'FATAL EXCEPTION|ANR in|Process: ' "$logcat_file"; then
+
+    # Only definitive crash/ANR signatures fail the gate. Generic `Process:` lines are not errors.
+    if grep -Eq 'FATAL EXCEPTION|ANR in|Fatal signal [0-9]+ \(SIG' "$logcat_file"; then
       echo "${label}_CRASH_EVIDENCE_FOUND"
-      tail -n 250 "$logcat_file" || true
+      tail -n 300 "$logcat_file" || true
       return 1
     fi
+
     pid="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
     resumed="$(adb shell dumpsys activity activities 2>/dev/null | grep -m1 -F "$PACKAGE" || true)"
     if [ -n "$pid" ] || printf '%s' "$resumed" | grep -q "$PACKAGE"; then
@@ -111,7 +117,8 @@ launch_and_verify() {
   done
 
   echo "${label}_LAUNCH_TIMEOUT"
-  tail -n 250 "$logcat_file" || true
+  echo "No definitive crash was observed, but the app did not become observable within the extended startup window."
+  tail -n 300 "$logcat_file" || true
   return 1
 }
 
@@ -120,9 +127,8 @@ if ! launch_and_verify "START" "$GITHUB_WORKSPACE/runtime-evidence/start.log" "$
   exit 32
 fi
 
-set +e
-adb shell am force-stop "$PACKAGE" >/dev/null 2>&1
-set -e
+echo "START_PASS"
+adb shell am force-stop "$PACKAGE" >/dev/null 2>&1 || true
 sleep 2
 
 if ! launch_and_verify "RESTART" "$GITHUB_WORKSPACE/runtime-evidence/restart.log" "$GITHUB_WORKSPACE/runtime-evidence/restart-logcat.log"; then
@@ -130,6 +136,7 @@ if ! launch_and_verify "RESTART" "$GITHUB_WORKSPACE/runtime-evidence/restart.log
   exit 33
 fi
 
+echo "RESTART_PASS"
 cp "$APK_FILE" "$GITHUB_WORKSPACE/final-apk/KUNAL-Universal-Video-debug.apk"
 echo "VERIFIED_STARTUP_APK_READY"
 exit 0
