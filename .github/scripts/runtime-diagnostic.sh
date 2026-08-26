@@ -10,13 +10,21 @@ if [ ! -s "$APK_FILE" ]; then
 fi
 
 # The build job already passed. Runtime gate must never rebuild or mutate source.
-# Validate APK metadata before install; a metadata failure is a runtime-input problem, not a reason to reboot repeatedly.
+# The emulator runner installs Android build-tools, but does not add its aapt binary
+# to PATH. Discover aapt explicitly instead of incorrectly reporting AAPT_MISSING.
 AAPT="$(command -v aapt || true)"
+if [ -z "$AAPT" ] && [ -n "${ANDROID_SDK_ROOT:-}" ]; then
+  AAPT="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name aapt -perm -111 -print -quit 2>/dev/null || true)"
+fi
+if [ -z "$AAPT" ] && [ -n "${ANDROID_HOME:-}" ]; then
+  AAPT="$(find "$ANDROID_HOME/build-tools" -type f -name aapt -perm -111 -print -quit 2>/dev/null || true)"
+fi
 if [ -z "$AAPT" ]; then
   echo "AAPT_MISSING"
   exit 21
 fi
 
+echo "AAPT=$AAPT"
 BADGING="$GITHUB_WORKSPACE/runtime-evidence/badging.txt"
 set +e
 "$AAPT" dump badging "$APK_FILE" > "$BADGING" 2>&1
