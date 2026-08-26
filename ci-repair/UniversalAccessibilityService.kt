@@ -1,9 +1,10 @@
+@file:Suppress("DEPRECATION")
+
 package com.kunal.universalvideo
 
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
@@ -81,14 +82,9 @@ class UniversalAccessibilityService : AccessibilityService() {
         }
     }
 
-    @Suppress("DEPRECATION")
     private fun snapshotRoot(): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
-        return if (Build.VERSION.SDK_INT >= 30) {
-            AccessibilityNodeInfo(root)
-        } else {
-            AccessibilityNodeInfo.obtain(root)
-        }
+        return AccessibilityNodeInfo.obtain(root)
     }
 
     override fun onInterrupt() {
