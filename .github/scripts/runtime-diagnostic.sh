@@ -1,59 +1,51 @@
 #!/usr/bin/env bash
-# Autonomous runtime gate: phone/network state is irrelevant to the GitHub runner.
 set -u
 
 cd "$PROJECT_DIR" || exit 1
-
 mkdir -p "$GITHUB_WORKSPACE/runtime-evidence" "$GITHUB_WORKSPACE/final-apk"
 
-# Deterministic preflight: repair only known build-tool compatibility issues before spending emulator time.
-python3 - <<'PY'
-from pathlib import Path
-root = Path('.')
-for p in root.rglob('build.gradle.kts'):
-    s = p.read_text(encoding='utf-8', errors='ignore')
-    changed = False
-    if 'sourceCompatibility = JavaVersion.VERSION_17' not in s:
-        s += '\nandroid {\n    compileOptions {\n        sourceCompatibility = JavaVersion.VERSION_17\n        targetCompatibility = JavaVersion.VERSION_17\n    }\n}\n'
-        changed = True
-    if 'jvmToolchain(17)' not in s and ('kotlin' in s.lower() or p.name == 'build.gradle.kts'):
-        s += '\nkotlin {\n    jvmToolchain(17)\n}\n'
-        changed = True
-    if changed:
-        p.write_text(s.rstrip() + '\n', encoding='utf-8')
+# BUILD-FIRST: never boot an emulator until the APK has been produced and validated.
+# Do not mutate source files during the verification run; repairs belong to the Doctor.
 
-# Preserve exact source evidence for an AI repair pass. Never treat a label/status string as a real connection.
-main_candidates = list(root.rglob('MainActivity.kt'))
-with open(Path('/tmp/kunal-source-audit.txt'), 'w', encoding='utf-8') as out:
-    out.write('PROJECT=' + str(root.resolve()) + '\n')
-    for p in sorted(root.rglob('*')):
-        if p.is_file() and p.suffix.lower() in {'.kt', '.java', '.xml', '.kts'}:
-            out.write(str(p.relative_to(root)) + '\n')
-    for p in main_candidates:
-        text = p.read_text(encoding='utf-8', errors='ignore')
-        if 'Controller ready' in text and 'R.id.connect' in text:
-            out.write('CONNECTION_PLACEHOLDER_DETECTED=' + str(p) + '\n')
-PY
-cp /tmp/kunal-source-audit.txt "$GITHUB_WORKSPACE/runtime-evidence/source-audit.txt" || true
+if [ ! -x ./gradlew ]; then
+  echo "GRADLE_WRAPPER_MISSING"
+  echo "Using provisioned Gradle instead of wasting emulator time."
+  GRADLE_CMD="gradle"
+else
+  GRADLE_CMD="./gradlew"
+fi
 
-gradle :wrapper --gradle-version 8.9 --distribution-type bin >/dev/null 2>&1 || true
-sed -i 's/\r$//' gradlew
-chmod +x gradlew
+BUILD_LOG="$GITHUB_WORKSPACE/runtime-evidence/build.log"
+set +e
+"$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace > "$BUILD_LOG" 2>&1
+BUILD_RC=$?
+set -e
 
-PACKAGE=""
-ACTIVITY=""
+if [ "$BUILD_RC" -ne 0 ]; then
+  echo "BUILD_FAIL rc=$BUILD_RC"
+  tail -n 220 "$BUILD_LOG" || true
+  exit 20
+fi
 
-repair() {
-  echo "[REPAIR] runtime recovery"
-  if [ -n "$PACKAGE" ]; then
-    adb shell am force-stop "$PACKAGE" 2>/dev/null || true
-    adb uninstall "$PACKAGE" 2>/dev/null || true
-  fi
-  adb kill-server 2>/dev/null || true
-  sleep 2
-  adb start-server 2>/dev/null || true
-}
+APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
+if [ ! -s "$APK_FILE" ]; then
+  echo "APK_BUILD_OUTPUT_MISSING"
+  exit 21
+fi
 
+# Validate APK metadata before starting the expensive emulator.
+PACKAGE="$(aapt dump badging "$APK_FILE" 2>/dev/null | sed "s/package: name='//;s/'.*//" | head -n1)"
+ACTIVITY="$(aapt dump badging "$APK_FILE" 2>/dev/null | sed "s/launchable-activity: name='//;s/'.*//" | head -n1)"
+
+echo "PACKAGE=$PACKAGE"
+echo "ACTIVITY=$ACTIVITY"
+
+if [ -z "$PACKAGE" ] || [ -z "$ACTIVITY" ]; then
+  echo "APK_METADATA_INVALID"
+  exit 22
+fi
+
+# From here onward the runner must already have a usable emulator.
 wait_for_online_adb() {
   local i state
   for i in $(seq 1 120); do
@@ -64,101 +56,61 @@ wait_for_online_adb() {
     fi
     echo "ADB_WAIT attempt=$i state=${state:-unknown}"
     sleep 2
-done
+  done
   echo "ADB_NOT_READY"
   adb devices -l || true
   return 1
 }
 
-for ATTEMPT in $(seq 1 30); do
-  echo "AUTONOMOUS ATTEMPT $ATTEMPT / 30"
-  rm -rf app/build
+if ! wait_for_online_adb; then
+  exit 30
+fi
 
-  ./gradlew :app:assembleDebug --no-daemon --stacktrace > "$GITHUB_WORKSPACE/runtime-evidence/build-$ATTEMPT.log" 2>&1
-  BUILD_RC=$?
-  if [ "$BUILD_RC" -ne 0 ]; then
-    echo "BUILD_FAIL attempt=$ATTEMPT"
-    tail -n 160 "$GITHUB_WORKSPACE/runtime-evidence/build-$ATTEMPT.log" || true
-    repair
-    continue
-  fi
+adb shell getprop sys.boot_completed > "$GITHUB_WORKSPACE/runtime-evidence/boot.txt" 2>&1 || true
+adb devices -l > "$GITHUB_WORKSPACE/runtime-evidence/adb.txt" 2>&1 || true
+adb logcat -c || true
+adb uninstall "$PACKAGE" >/dev/null 2>&1 || true
 
-  APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
-  if [ ! -s "$APK_FILE" ]; then
-    echo "APK_BUILD_OUTPUT_MISSING"
-    repair
-    continue
-  fi
+set +e
+adb install "$APK_FILE" > "$GITHUB_WORKSPACE/runtime-evidence/install.log" 2>&1
+INSTALL_RC=$?
+set -e
+if [ "$INSTALL_RC" -ne 0 ]; then
+  echo "INSTALL_FAIL rc=$INSTALL_RC"
+  cat "$GITHUB_WORKSPACE/runtime-evidence/install.log" || true
+  exit 31
+fi
 
-  PACKAGE="$(aapt dump badging "$APK_FILE" | sed "s/package: name='//;s/'.*//" | head -n1)"
-  ACTIVITY="$(aapt dump badging "$APK_FILE" | sed "s/launchable-activity: name='//;s/'.*//" | head -n1)"
-  echo "PACKAGE=$PACKAGE"
-  echo "ACTIVITY=$ACTIVITY"
+set +e
+timeout 30s adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/start.log" 2>&1
+START_RC=$?
+set -e
+sleep 8
+adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/logcat.log" || true
+PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+echo "START_RC=$START_RC PID=$PID"
 
-  if [ -z "$PACKAGE" ] || [ -z "$ACTIVITY" ]; then
-    echo "APK_METADATA_INVALID"
-    repair
-    continue
-  fi
+if [ "$START_RC" -ne 0 ] || [ -z "$PID" ]; then
+  echo "RUNTIME_LAUNCH_FAILED"
+  tail -n 300 "$GITHUB_WORKSPACE/runtime-evidence/logcat.log" || true
+  exit 32
+fi
 
-  if ! wait_for_online_adb; then
-    repair
-    continue
-  fi
+set +e
+timeout 20s adb shell am force-stop "$PACKAGE" >/dev/null 2>&1
+adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/restart.log" 2>&1
+RESTART_RC=$?
+set -e
+sleep 8
+PID2="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
+echo "RESTART_RC=$RESTART_RC PID2=$PID2"
 
-  adb shell getprop sys.boot_completed > "$GITHUB_WORKSPACE/runtime-evidence/boot-$ATTEMPT.txt" 2>&1 || true
-  adb devices -l > "$GITHUB_WORKSPACE/runtime-evidence/adb-$ATTEMPT.txt" 2>&1 || true
-  adb logcat -c || true
-  adb uninstall "$PACKAGE" >/dev/null 2>&1 || true
+if [ "$RESTART_RC" -ne 0 ] || [ -z "$PID2" ]; then
+  echo "RESTART_CRASH_CONFIRMED"
+  adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/restart-logcat.log" || true
+  exit 33
+fi
 
-  adb install "$APK_FILE" > "$GITHUB_WORKSPACE/runtime-evidence/install-$ATTEMPT.log" 2>&1
-  INSTALL_RC=$?
-  if [ "$INSTALL_RC" -ne 0 ]; then
-    echo "INSTALL_FAIL attempt=$ATTEMPT"
-    cat "$GITHUB_WORKSPACE/runtime-evidence/install-$ATTEMPT.log" || true
-    repair
-    continue
-  fi
-
-  adb shell am force-stop "$PACKAGE" || true
-  timeout 30s adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/start-$ATTEMPT.log" 2>&1
-  START_RC=$?
-  echo "START_RC=$START_RC"
-
-  sleep 8
-  adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/logcat-$ATTEMPT.log" || true
-  adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/runtime-evidence/activity-$ATTEMPT.txt" 2>&1 || true
-  adb shell dumpsys window windows > "$GITHUB_WORKSPACE/runtime-evidence/window-$ATTEMPT.txt" 2>&1 || true
-  adb shell dumpsys package "$PACKAGE" > "$GITHUB_WORKSPACE/runtime-evidence/package-$ATTEMPT.txt" 2>&1 || true
-
-  PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-  echo "PID=$PID"
-
-  if [ "$START_RC" -ne 0 ] || [ -z "$PID" ]; then
-    echo "RUNTIME_LAUNCH_FAILED attempt=$ATTEMPT"
-    tail -n 300 "$GITHUB_WORKSPACE/runtime-evidence/logcat-$ATTEMPT.log" || true
-    repair
-    continue
-  fi
-
-  adb shell am force-stop "$PACKAGE" || true
-  timeout 20s adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/restart-$ATTEMPT.log" 2>&1
-  RESTART_RC=$?
-  sleep 8
-  PID2="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-
-  if [ "$RESTART_RC" -ne 0 ] || [ -z "$PID2" ]; then
-    echo "RESTART_CRASH_CONFIRMED attempt=$ATTEMPT"
-    tail -n 300 "$GITHUB_WORKSPACE/runtime-evidence/logcat-$ATTEMPT.log" || true
-    repair
-    continue
-  fi
-
-  echo "RUNTIME_STARTUP_SURVIVED"
-  cp "$APK_FILE" "$GITHUB_WORKSPACE/final-apk/KUNAL-Universal-Video-debug.apk"
-  echo "VERIFIED_APK_READY"
-  exit 0
-done
-
-echo "ALL_AUTONOMOUS_ATTEMPTS_EXHAUSTED"
-exit 1
+cp "$APK_FILE" "$GITHUB_WORKSPACE/final-apk/KUNAL-Universal-Video-debug.apk"
+echo "VERIFIED_STARTUP_APK_READY"
+exit 0
