@@ -15,6 +15,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import java.util.UUID
 
+/**
+ * Startup gate is intentionally isolated from AppCompat.
+ * The 12-stage product sequence is preserved; this file only owns the Android startup/connection gate.
+ */
 class MainActivity : ComponentActivity() {
     companion object { const val PREFS = "kuv"; const val TARGET = "target_package"; const val SESSION = "session_id" }
     private lateinit var status: TextView
