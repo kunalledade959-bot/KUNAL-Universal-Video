@@ -56,12 +56,7 @@ jobs:
           python3 - "$APP_DIR" "$MAIN_ACTIVITY" "$MANIFEST" "$APP_BUILD" <<'PY'
           import re, sys
           from pathlib import Path
-
-          app = Path(sys.argv[1])
-          main = Path(sys.argv[2])
-          manifest = Path(sys.argv[3])
-          build = Path(sys.argv[4])
-
+          app = Path(sys.argv[1]); main = Path(sys.argv[2]); manifest = Path(sys.argv[3]); build = Path(sys.argv[4])
           suppressions = {
               "GalleryExporter.kt": ["DEPRECATION"],
               "LocalBridgeService.kt": ["KotlinConstantConditions", "SENSELESS_COMPARISON", "ConstantConditionIf"],
@@ -71,62 +66,42 @@ jobs:
           java_dir = app / "src/main/java/com/kunal/universalvideo"
           for name, names in suppressions.items():
               p = java_dir / name
-              if not p.exists():
-                  raise SystemExit(f"missing expected source: {p}")
+              if not p.exists(): raise SystemExit(f"missing expected source: {p}")
               s = p.read_text(encoding="utf-8")
               wanted = '@file:Suppress(' + ', '.join('"'+x+'"' for x in names) + ')'
-              if not s.startswith('@file:Suppress('):
-                  s = wanted + "\n\n" + s
+              if not s.startswith('@file:Suppress('): s = wanted + "\n\n" + s
               p.write_text(s, encoding="utf-8")
-
           tg = java_dir / "TargetGuideManager.kt"
-          s = tg.read_text(encoding="utf-8")
-          s = s.replace(".versionCode", ".longVersionCode")
-          tg.write_text(s, encoding="utf-8")
-
+          tg.write_text(tg.read_text(encoding="utf-8").replace(".versionCode", ".longVersionCode"), encoding="utf-8")
           s = main.read_text(encoding="utf-8")
           if not re.search(r'(?m)^\s*import\s+androidx\.appcompat\.app\.AppCompatActivity\s*$', s):
               m = re.search(r'(?m)^package\s+[^\n]+\n', s)
-              if not m:
-                  raise SystemExit("MainActivity package declaration missing")
+              if not m: raise SystemExit("MainActivity package declaration missing")
               s = s[:m.end()] + "\nimport androidx.appcompat.app.AppCompatActivity\n" + s[m.end():]
           s = re.sub(r'\bclass\s+MainActivity\s*:\s*(?:android\.app\.)?Activity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
           s = re.sub(r'\bclass\s+MainActivity\s*:\s*ComponentActivity\s*\(', 'class MainActivity : AppCompatActivity(', s, count=1)
-          if not re.search(r'\bclass\s+MainActivity\s*:\s*AppCompatActivity\s*\(', s):
-              raise SystemExit("MainActivity must be AppCompatActivity")
+          if not re.search(r'\bclass\s+MainActivity\s*:\s*AppCompatActivity\s*\(', s): raise SystemExit("MainActivity must be AppCompatActivity")
           if 'setTheme(R.style.KunalRuntimeTheme)' not in s:
               m = re.search(r'(?m)^(\s*)override\s+fun\s+onCreate\s*\(', s)
-              if not m:
-                  raise SystemExit("MainActivity.onCreate missing")
+              if not m: raise SystemExit("MainActivity.onCreate missing")
               brace = s.find('{', m.end())
-              if brace < 0:
-                  raise SystemExit("MainActivity.onCreate brace missing")
+              if brace < 0: raise SystemExit("MainActivity.onCreate brace missing")
               s = s[:brace+1] + "\n" + m.group(1) + "    setTheme(R.style.KunalRuntimeTheme)" + s[brace+1:]
-          if s.find('setTheme(R.style.KunalRuntimeTheme)') > s.find('super.onCreate'):
-              raise SystemExit("theme must be set before super.onCreate")
+          if s.find('setTheme(R.style.KunalRuntimeTheme)') > s.find('super.onCreate'): raise SystemExit("theme must be set before super.onCreate")
           main.write_text(s, encoding="utf-8")
-
-          values = app / "src/main/res/values"
-          values.mkdir(parents=True, exist_ok=True)
-          (values / "kunal_runtime_theme.xml").write_text(
-              '<?xml version="1.0" encoding="utf-8"?>\n<resources>\n'
-              '    <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n'
-              '</resources>\n', encoding="utf-8")
-
+          values = app / "src/main/res/values"; values.mkdir(parents=True, exist_ok=True)
+          (values / "kunal_runtime_theme.xml").write_text('<?xml version="1.0" encoding="utf-8"?>\n<resources>\n    <style name="KunalRuntimeTheme" parent="Theme.AppCompat.Light.NoActionBar" />\n</resources>\n', encoding="utf-8")
           g = build.read_text(encoding="utf-8")
           if 'androidx.appcompat:appcompat' not in g:
               m = re.search(r'(?m)^\s*dependencies\s*\{', g)
-              if not m:
-                  raise SystemExit("dependencies block missing")
+              if not m: raise SystemExit("dependencies block missing")
               p = g.find('\n', m.start()) + 1
               g = g[:p] + '    implementation("androidx.appcompat:appcompat:1.7.0")\n' + g[p:]
               build.write_text(g, encoding="utf-8")
-
           x = manifest.read_text(encoding="utf-8")
           def force_theme(m):
               tag = m.group(0)
-              if re.search(r'android:theme\s*=\s*"[^"]*"', tag):
-                  return re.sub(r'android:theme\s*=\s*"[^"]*"', 'android:theme="@style/KunalRuntimeTheme"', tag, count=1)
+              if re.search(r'android:theme\s*=\s*"[^"]*"', tag): return re.sub(r'android:theme\s*=\s*"[^"]*"', 'android:theme="@style/KunalRuntimeTheme"', tag, count=1)
               return tag[:-1] + ' android:theme="@style/KunalRuntimeTheme">'
           x = re.sub(r'<application\b[^>]*>', force_theme, x, count=1, flags=re.S)
           x = re.sub(r'<activity\b(?=[^>]*android:name\s*=\s*"[^"]*MainActivity")[^>]*>', force_theme, x, count=1, flags=re.S)
@@ -159,7 +134,7 @@ jobs:
           gradle :wrapper --gradle-version 8.9 --distribution-type bin >/dev/null
           chmod +x gradlew
           ./gradlew :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/gradle-build.log"
-          if grep -E '^w: |^e: ' "$GITHUB_WORKSPACE/gradle-build.log"; then
+          if grep -En '(^|[[:space:]])(w: |e: |.*warning:)' "$GITHUB_WORKSPACE/gradle-build.log"; then
             echo 'ZERO-WARNING GATE: FAIL'
             exit 1
           fi
@@ -191,47 +166,26 @@ jobs:
           disable-animations: true
           script: |
             set -uo pipefail
-            OUT="$GITHUB_WORKSPACE/runtime-final-gate"
-            PKG='com.kunal.universalvideo'
-            ACT='com.kunal.universalvideo.MainActivity'
-            mkdir -p "$OUT"
+            OUT="$GITHUB_WORKSPACE/runtime-final-gate"; PKG='com.kunal.universalvideo'; ACT='com.kunal.universalvideo.MainActivity'; mkdir -p "$OUT"
             adb wait-for-device
             until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; do sleep 2; done
             adb shell pm uninstall "$PKG" >/dev/null 2>&1 || true
             adb logcat -c
             adb shell settings put secure enabled_accessibility_services "$PKG/com.kunal.universalvideo.UniversalAccessibilityService" || true
             adb shell settings put secure accessibility_enabled 1 || true
-            if ! adb install --no-streaming "$APK_FILE" > "$OUT/install.txt" 2>&1; then
-              cat "$OUT/install.txt"
-              exit 1
-            fi
+            if ! adb install --no-streaming "$APK_FILE" > "$OUT/install.txt" 2>&1; then cat "$OUT/install.txt"; exit 1; fi
             grep -q '^Success' "$OUT/install.txt"
-            timeout 20s adb shell am start -S -n "$PKG/$ACT" > "$OUT/start.txt" 2>&1
-            START_RC=$?
-            echo "START_RC=$START_RC" > "$OUT/start-status.txt"
-            for i in $(seq 1 30); do
-              adb logcat -d -v threadtime > "$OUT/logcat.txt" 2>&1 || true
-              if grep -q "Displayed $PKG/$ACT" "$OUT/logcat.txt"; then break; fi
-              sleep 1
-            done
+            timeout 20s adb shell am start -S -n "$PKG/$ACT" > "$OUT/start.txt" 2>&1; START_RC=$?; echo "START_RC=$START_RC" > "$OUT/start-status.txt"
+            for i in $(seq 1 30); do adb logcat -d -v threadtime > "$OUT/logcat.txt" 2>&1 || true; if grep -q "Displayed $PKG/$ACT" "$OUT/logcat.txt"; then break; fi; sleep 1; done
             adb shell pidof "$PKG" > "$OUT/pid.txt" 2>&1 || true
             adb shell dumpsys activity activities > "$OUT/activity.txt" 2>&1 || true
             adb shell dumpsys window windows > "$OUT/window.txt" 2>&1 || true
             adb shell dumpsys package "$PKG" > "$OUT/package.txt" 2>&1 || true
             if grep -Eq 'FATAL EXCEPTION: main|Unable to start activity ComponentInfo\{com\.kunal\.universalvideo/com\.kunal\.universalvideo\.MainActivity\}|ANR in com\.kunal\.universalvideo|Application Not Responding|Theme\.AppCompat' "$OUT/logcat.txt"; then
-              echo 'RUNTIME STARTUP GATE: FAIL'
-              grep -E 'AndroidRuntime|FATAL EXCEPTION|Unable to start activity|Caused by:|ANR in|Application Not Responding|Theme\.AppCompat|Displayed' "$OUT/logcat.txt" | tail -n 300 || true
-              exit 1
+              echo 'RUNTIME STARTUP GATE: FAIL'; grep -E 'AndroidRuntime|FATAL EXCEPTION|Unable to start activity|Caused by:|ANR in|Application Not Responding|Theme\.AppCompat|Displayed' "$OUT/logcat.txt" | tail -n 300 || true; exit 1
             fi
-            if ! grep -q "Displayed $PKG/$ACT" "$OUT/logcat.txt"; then
-              echo 'RUNTIME STARTUP GATE: FAIL - first frame not observed'
-              tail -n 300 "$OUT/logcat.txt" || true
-              exit 1
-            fi
-            if [ ! -s "$OUT/pid.txt" ]; then
-              echo 'RUNTIME STARTUP GATE: FAIL - process not alive'
-              exit 1
-            fi
+            if ! grep -q "Displayed $PKG/$ACT" "$OUT/logcat.txt"; then echo 'RUNTIME STARTUP GATE: FAIL - first frame not observed'; tail -n 300 "$OUT/logcat.txt" || true; exit 1; fi
+            if [ ! -s "$OUT/pid.txt" ]; then echo 'RUNTIME STARTUP GATE: FAIL - process not alive'; exit 1; fi
             echo 'RUNTIME STARTUP GATE: PASS'
 
       - name: Upload final APK and evidence
