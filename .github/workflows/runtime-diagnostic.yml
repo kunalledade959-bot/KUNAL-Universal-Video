@@ -19,9 +19,9 @@ permissions:
   contents: read
 
 jobs:
-  runtime-diagnostic:
+  build-apk:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 25
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -52,15 +52,63 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
-        with:
-          log-accepted-android-sdk-licenses: false
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
 
-      - name: Autonomous build and Android runtime repair loop
+      - name: Build APK before emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          if [ -x ./gradlew ]; then
+            GRADLE_CMD="./gradlew"
+          else
+            GRADLE_CMD="gradle"
+          fi
+          "$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          APK_FILE="$(find app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)"
+          test -s "$APK_FILE"
+          mkdir -p "$GITHUB_WORKSPACE/built-apk"
+          cp "$APK_FILE" "$GITHUB_WORKSPACE/built-apk/KUNAL-Universal-Video-debug.apk"
+          echo "APK=$APK_FILE"
+          ls -lh "$GITHUB_WORKSPACE/built-apk/KUNAL-Universal-Video-debug.apk"
+
+      - name: Upload built APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: KUNAL-Universal-Video-BUILT-APK
+          path: built-apk/KUNAL-Universal-Video-debug.apk
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: KUNAL-Universal-Video-build-log
+          path: build.log
+          if-no-files-found: ignore
+
+  runtime-diagnostic:
+    needs: build-apk
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Download verified build output
+        uses: actions/download-artifact@v7
+        with:
+          name: KUNAL-Universal-Video-BUILT-APK
+          path: built-apk
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Android runtime gate
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -72,7 +120,7 @@ jobs:
           emulator-boot-timeout: 900
           script: bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
 
-      - name: Upload final APK and evidence
+      - name: Upload verified startup APK
         if: success()
         uses: actions/upload-artifact@v7
         with:
@@ -87,6 +135,3 @@ jobs:
           name: KUNAL-Universal-Video-runtime-evidence
           path: runtime-evidence/
           if-no-files-found: ignore
-
-      # OWNER MODE: every change that reaches this workflow is verified by the real emulator gate.
-      # A failure automatically enters autonomous-apk-doctor.yml through workflow_run.
