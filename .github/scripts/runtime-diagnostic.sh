@@ -1,51 +1,45 @@
 #!/usr/bin/env bash
 set -u
 
-cd "$PROJECT_DIR" || exit 1
 mkdir -p "$GITHUB_WORKSPACE/runtime-evidence" "$GITHUB_WORKSPACE/final-apk"
+APK_FILE="$GITHUB_WORKSPACE/built-apk/KUNAL-Universal-Video-debug.apk"
 
-# BUILD-FIRST: never boot an emulator until the APK has been produced and validated.
-# Do not mutate source files during the verification run; repairs belong to the Doctor.
-
-if [ ! -x ./gradlew ]; then
-  echo "GRADLE_WRAPPER_MISSING"
-  echo "Using provisioned Gradle instead of wasting emulator time."
-  GRADLE_CMD="gradle"
-else
-  GRADLE_CMD="./gradlew"
-fi
-
-BUILD_LOG="$GITHUB_WORKSPACE/runtime-evidence/build.log"
-set +e
-"$GRADLE_CMD" :app:assembleDebug --no-daemon --stacktrace > "$BUILD_LOG" 2>&1
-BUILD_RC=$?
-set -e
-
-if [ "$BUILD_RC" -ne 0 ]; then
-  echo "BUILD_FAIL rc=$BUILD_RC"
-  tail -n 220 "$BUILD_LOG" || true
+if [ ! -s "$APK_FILE" ]; then
+  echo "PREBUILT_APK_MISSING"
   exit 20
 fi
 
-APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
-if [ ! -s "$APK_FILE" ]; then
-  echo "APK_BUILD_OUTPUT_MISSING"
+# The build job already passed. Runtime gate must never rebuild or mutate source.
+# Validate APK metadata before install; a metadata failure is a runtime-input problem, not a reason to reboot repeatedly.
+AAPT="$(command -v aapt || true)"
+if [ -z "$AAPT" ]; then
+  echo "AAPT_MISSING"
   exit 21
 fi
 
-# Validate APK metadata before starting the expensive emulator.
-PACKAGE="$(aapt dump badging "$APK_FILE" 2>/dev/null | sed "s/package: name='//;s/'.*//" | head -n1)"
-ACTIVITY="$(aapt dump badging "$APK_FILE" 2>/dev/null | sed "s/launchable-activity: name='//;s/'.*//" | head -n1)"
+BADGING="$GITHUB_WORKSPACE/runtime-evidence/badging.txt"
+set +e
+"$AAPT" dump badging "$APK_FILE" > "$BADGING" 2>&1
+AAPT_RC=$?
+set -e
+cat "$BADGING"
+
+if [ "$AAPT_RC" -ne 0 ]; then
+  echo "APK_BADGING_FAILED rc=$AAPT_RC"
+  exit 22
+fi
+
+PACKAGE="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" "$BADGING" | head -n1)"
+ACTIVITY="$(sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p" "$BADGING" | head -n1)"
 
 echo "PACKAGE=$PACKAGE"
 echo "ACTIVITY=$ACTIVITY"
 
 if [ -z "$PACKAGE" ] || [ -z "$ACTIVITY" ]; then
   echo "APK_METADATA_INVALID"
-  exit 22
+  exit 23
 fi
 
-# From here onward the runner must already have a usable emulator.
 wait_for_online_adb() {
   local i state
   for i in $(seq 1 120); do
@@ -97,7 +91,7 @@ if [ "$START_RC" -ne 0 ] || [ -z "$PID" ]; then
 fi
 
 set +e
-timeout 20s adb shell am force-stop "$PACKAGE" >/dev/null 2>&1
+adb shell am force-stop "$PACKAGE" >/dev/null 2>&1
 adb shell am start -W -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/restart.log" 2>&1
 RESTART_RC=$?
 set -e
