@@ -1,0 +1,199 @@
+name: Autonomous APK Doctor
+
+on:
+  workflow_run:
+    workflows: ["Runtime Crash Diagnostic"]
+    types: [completed]
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-universal-video-ai-doctor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+  copilot-requests: write
+
+jobs:
+  doctor:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - name: Checkout current main
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download failure evidence from triggering run
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/download-artifact@v5
+        with:
+          name: KUNAL-Universal-Video-runtime-evidence
+          path: ai-evidence
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare evidence for manual dispatch
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          mkdir -p ai-evidence
+          printf '%s\n' 'Manual autonomous repair run. Inspect the repository and current Android project for the first real blocker.' > ai-evidence/manual-trigger.txt
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Autonomous repair iteration 1
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          copilot --autopilot --yolo --max-autopilot-continues 12 -p '
+          You are the autonomous senior Android repair engineer for KUNAL Universal Video.
+          Work directly in this checked-out repository and repair the APK, not merely the CI symptom.
+          Read ai-evidence first, then inspect the Android project ZIP and its extracted source.
+          The authoritative goal is a real working APK: build, install, launch, survive restart, and preserve the intended controller, target-app control, screen recording, and video-generation architecture.
+          Diagnose the exact root cause from evidence. Make the smallest correct source-level repair.
+          You may unzip KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip, edit its Android/Kotlin/Gradle/XML sources, rebuild or run static checks, then replace the ZIP with the repaired project.
+          Do NOT edit .github/workflows files. Do NOT hide warnings/errors or fake a PASS. Do NOT replace the project with a toy app.
+          Preserve working features and package com.kunal.universalvideo.
+          Before finishing, ensure KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip contains the repaired Android project and summarize the exact repair in ai-evidence/ai-repair-1.txt.
+          If the evidence shows only infrastructure failure, repair the infrastructure-compatible project/tooling without changing app behavior.
+          '
+
+      - name: Gate test after iteration 1
+        id: gate1
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            rm -rf verification-package
+            mkdir -p verification-package
+            unzip -q KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip -d verification-package
+            PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+            test -n "$PROJECT_DIR"
+            export PROJECT_DIR
+            bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
+
+      - name: Autonomous repair iteration 2
+        if: ${{ steps.gate1.outcome != 'success' }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          copilot --autopilot --yolo --max-autopilot-continues 12 -p '
+          Continue autonomous repair of KUNAL Universal Video after a failed runtime gate.
+          Read the newest runtime-evidence files and ai-repair-1.txt. Re-open the current Android project ZIP and diagnose the NEW exact failure.
+          Fix the underlying Android/Kotlin/Gradle/runtime problem, not the test.
+          Preserve all existing intended features. Do not edit .github/workflows files and do not fake PASS.
+          Rebuild/check what can be checked on Ubuntu, then replace KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip with the improved project.
+          Record the diagnosis and repair in ai-evidence/ai-repair-2.txt.
+          '
+
+      - name: Gate test after iteration 2
+        id: gate2
+        if: ${{ steps.gate1.outcome != 'success' }}
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            rm -rf verification-package
+            mkdir -p verification-package
+            unzip -q KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip -d verification-package
+            PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+            test -n "$PROJECT_DIR"
+            export PROJECT_DIR
+            bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
+
+      - name: Autonomous repair iteration 3
+        if: ${{ steps.gate1.outcome != 'success' && steps.gate2.outcome != 'success' }}
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          copilot --autopilot --yolo --max-autopilot-continues 12 -p '
+          Final autonomous repair pass for KUNAL Universal Video.
+          Inspect ALL accumulated runtime/build evidence and both previous repair notes. Find the remaining root cause and fix the real Android project.
+          You are not allowed to declare success unless the APK can actually build, install, launch, and survive restart in the emulator gate.
+          Preserve the intended controller/target-app/screen-recording/video-generation architecture; do not replace it with a dummy app and do not edit workflow files.
+          Replace KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip with the best corrected project and write ai-evidence/ai-repair-3.txt with the exact root cause and repair.
+          '
+
+      - name: Final gate test after iteration 3
+        id: gate3
+        if: ${{ steps.gate1.outcome != 'success' && steps.gate2.outcome != 'success' }}
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            rm -rf verification-package
+            mkdir -p verification-package
+            unzip -q KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip -d verification-package
+            PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+            test -n "$PROJECT_DIR"
+            export PROJECT_DIR
+            bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
+
+      - name: Publish verified APK
+        if: ${{ steps.gate1.outcome == 'success' || steps.gate2.outcome == 'success' || steps.gate3.outcome == 'success' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: KUNAL-Universal-Video-AI-VERIFIED-APK
+          path: final-apk/KUNAL-Universal-Video-debug.apk
+          if-no-files-found: error
+
+      - name: Commit repaired project after a real gate PASS
+        if: ${{ steps.gate1.outcome == 'success' || steps.gate2.outcome == 'success' || steps.gate3.outcome == 'success' }}
+        shell: bash
+        run: |
+          git config user.name 'kunalledade959-bot'
+          git config user.email 'kunalledade959-bot@users.noreply.github.com'
+          git add KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip ai-evidence || true
+          if git diff --cached --quiet; then
+            echo 'No repository changes to commit.'
+          else
+            git commit -m 'fix: publish AI-repaired verified Android project'
+            git push origin main
+          fi
+
+      - name: Upload doctor evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: KUNAL-Universal-Video-AI-doctor-evidence
+          path: ai-evidence/
+          if-no-files-found: ignore
+
+      - name: Fail if all autonomous gates failed
+        if: ${{ steps.gate1.outcome != 'success' && steps.gate2.outcome != 'success' && steps.gate3.outcome != 'success' }}
+        shell: bash
+        run: |
+          echo 'All autonomous repair iterations failed their real runtime gate.'
+          exit 1
