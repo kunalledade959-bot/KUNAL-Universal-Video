@@ -5,37 +5,15 @@ on:
   push:
     paths:
       - "*.zip"
+      - "pro_repair_v3.py"
       - ".github/workflows/main.yml"
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Find and extract Android project
-        shell: bash
-        run: |
-          set -e
-
-          ZIP_FILE="$(find . -maxdepth 1 -type f -name '*.zip' | head -n 1)"
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: Android project ZIP not found."
-            echo "Files available:"
-            find . -maxdepth 2 -type f -print
-            exit 1
-          fi
-
-          echo "Using ZIP: $ZIP_FILE"
-          rm -rf android-project
-          mkdir -p android-project
-          unzip -q "$ZIP_FILE" -d android-project
-
-          echo "Extracted project:"
-          find android-project -maxdepth 4 -type f -print
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -48,63 +26,71 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Verify Android project
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
         shell: bash
         run: |
-          set -e
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
 
-          cd android-project
-
-          if [ ! -f "settings.gradle.kts" ]; then
-            echo "ERROR: settings.gradle.kts not found."
-            exit 1
-          fi
-
-          if [ ! -f "build.gradle.kts" ]; then
-            echo "ERROR: build.gradle.kts not found."
-            exit 1
-          fi
-
-          if [ ! -f "app/build.gradle.kts" ]; then
-            echo "ERROR: app/build.gradle.kts not found."
-            exit 1
-          fi
-
-          echo "PROJECT STRUCTURE OK"
-
-      - name: Build Debug APK
+      - name: Run autonomous repair and build
         shell: bash
         run: |
-          set -o pipefail
+          python3 pro_repair_v3.py
 
-          cd android-project
-
-          gradle :app:assembleDebug --stacktrace --info
-
-      - name: Locate APK
+      - name: Verify APK artifact
         shell: bash
         run: |
-          set -e
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          sha256sum KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
 
-          echo "Searching for generated APK..."
-
-          find android-project/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" \
-            -print
-
-          APK_COUNT="$(find android-project/app/build/outputs/apk \
-            -type f \
-            -name "*.apk" | wc -l)"
-
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: APK was not generated."
-            exit 1
-          fi
-
-      - name: Upload APK artifact
+      - name: Upload APK and verification report
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-APK
-          path: android-project/app/build/outputs/apk/**/*.apk
+          path: |
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
           if-no-files-found: error
+
+  emulator-smoke-test:
+    needs: build-apk
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-APK
+          path: artifact
+
+      - name: Android emulator smoke test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
+          script: |
+            adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            adb shell am start -n com.kunal.universalvideo/.MainActivity
+            sleep 5
+            adb shell dumpsys package com.kunal.universalvideo | grep -q 'com.kunal.universalvideo'
+            adb shell dumpsys activity activities | grep -q 'com.kunal.universalvideo/.MainActivity'
+            adb logcat -d -t 300 > emulator-logcat.txt
+
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-emulator-evidence
+          path: emulator-logcat.txt
+          if-no-files-found: ignore
