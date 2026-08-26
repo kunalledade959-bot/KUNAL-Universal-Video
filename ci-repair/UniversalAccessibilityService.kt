@@ -3,6 +3,7 @@ package com.kunal.universalvideo
 import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
@@ -69,18 +70,24 @@ class UniversalAccessibilityService : AccessibilityService() {
         val previous = lastEvidenceAt.get()
         if (now - previous < 300L || !lastEvidenceAt.compareAndSet(previous, now)) return
 
-        val root = rootInActiveWindow?.let { AccessibilityNodeInfo.obtain(it) } ?: return
+        val root = snapshotRoot() ?: return
         worker.execute {
-            try {
-                runCatching {
-                    TargetGuideManager.captureUiEvidence(applicationContext, root)
-                }
-                runCatching {
-                    AutonomousWorkflowLearner.discover(applicationContext, packageName, root)
-                }
-            } finally {
-                root.recycle()
+            runCatching {
+                TargetGuideManager.captureUiEvidence(applicationContext, root)
             }
+            runCatching {
+                AutonomousWorkflowLearner.discover(applicationContext, packageName, root)
+            }
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun snapshotRoot(): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        return if (Build.VERSION.SDK_INT >= 30) {
+            AccessibilityNodeInfo(root)
+        } else {
+            AccessibilityNodeInfo.obtain(root)
         }
     }
 
