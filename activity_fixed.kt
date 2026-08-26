@@ -11,11 +11,11 @@ import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.Spinner
 import android.widget.TextView
+import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import java.util.UUID
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
     companion object { const val PREFS = "kuv"; const val TARGET = "target_package"; const val SESSION = "session_id" }
     private lateinit var status: TextView
     private var bridge: LocalBridgeService? = null
