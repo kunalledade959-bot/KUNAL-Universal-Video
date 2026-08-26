@@ -8,6 +8,7 @@ on:
       - "KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip"
       - ".github/workflows/runtime-diagnostic.yml"
       - ".github/workflows/runtime-watchdog.yml"
+      - ".github/scripts/runtime-diagnostic.sh"
 
 permissions:
   contents: read
@@ -18,7 +19,7 @@ jobs:
     timeout-minutes: 350
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Locate Android project package
         shell: bash
@@ -38,14 +39,16 @@ jobs:
           echo "Using $ZIP_FILE"
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
           cache: gradle
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          log-accepted-android-sdk-licenses: false
 
       - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
@@ -62,93 +65,11 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
           disable-animations: true
           emulator-boot-timeout: 900
-          script: |
-            cd "$PROJECT_DIR"
-            gradle :wrapper --gradle-version 8.9 --distribution-type bin >/dev/null 2>&1 || true
-            sed -i 's/\r$//' gradlew
-            chmod +x gradlew
-            mkdir -p "$GITHUB_WORKSPACE/runtime-evidence" "$GITHUB_WORKSPACE/final-apk"
-            PACKAGE=""
-            ACTIVITY=""
-            repair() {
-              echo "[REPAIR] runtime recovery"
-              adb shell am force-stop "$PACKAGE" 2>/dev/null || true
-              adb uninstall "$PACKAGE" 2>/dev/null || true
-              adb kill-server 2>/dev/null || true
-              sleep 2
-              adb start-server 2>/dev/null || true
-              adb wait-for-device || true
-            }
-            for ATTEMPT in $(seq 1 30); do
-              echo "AUTONOMOUS ATTEMPT $ATTEMPT / 30"
-              rm -rf app/build
-              ./gradlew :app:assembleDebug --no-daemon --stacktrace > "$GITHUB_WORKSPACE/runtime-evidence/build-$ATTEMPT.log" 2>&1
-              BUILD_RC=$?
-              if [ "$BUILD_RC" -ne 0 ]; then
-                echo "BUILD_FAIL attempt=$ATTEMPT"
-                tail -n 120 "$GITHUB_WORKSPACE/runtime-evidence/build-$ATTEMPT.log" || true
-                repair
-                continue
-              fi
-              APK_FILE="$(find app/build/outputs/apk/debug -maxdepth 1 -type f -name '*.apk' -print -quit)"
-              if [ ! -s "$APK_FILE" ]; then
-                echo "APK_BUILD_OUTPUT_MISSING"
-                repair
-                continue
-              fi
-              PACKAGE="$(aapt dump badging "$APK_FILE" | sed "s/package: name='//;s/'.*//" | head -n1)"
-              ACTIVITY="$(aapt dump badging "$APK_FILE" | sed "s/launchable-activity: name='//;s/'.*//" | head -n1)"
-              echo "PACKAGE=$PACKAGE"
-              echo "ACTIVITY=$ACTIVITY"
-              if [ -z "$PACKAGE" ] || [ -z "$ACTIVITY" ]; then
-                echo "APK_METADATA_INVALID"
-                repair
-                continue
-              fi
-              adb wait-for-device || true
-              adb shell get-state || true
-              adb logcat -c || true
-              adb uninstall "$PACKAGE" >/dev/null 2>&1 || true
-              adb install "$APK_FILE" > "$GITHUB_WORKSPACE/runtime-evidence/install-$ATTEMPT.log" 2>&1
-              INSTALL_RC=$?
-              if [ "$INSTALL_RC" -ne 0 ]; then
-                echo "INSTALL_FAIL attempt=$ATTEMPT"
-                cat "$GITHUB_WORKSPACE/runtime-evidence/install-$ATTEMPT.log" || true
-                repair
-                continue
-              fi
-              adb shell am force-stop "$PACKAGE" || true
-              adb shell am start -n "$PACKAGE/$ACTIVITY" > "$GITHUB_WORKSPACE/runtime-evidence/start-$ATTEMPT.log" 2>&1
-              sleep 12
-              adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/logcat-$ATTEMPT.log" || true
-              PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-              echo "PID=$PID"
-              if [ -z "$PID" ]; then
-                echo "RUNTIME_CRASH_CONFIRMED attempt=$ATTEMPT"
-                tail -n 250 "$GITHUB_WORKSPACE/runtime-evidence/logcat-$ATTEMPT.log" || true
-                repair
-                continue
-              fi
-              adb shell am force-stop "$PACKAGE" || true
-              adb shell am start -n "$PACKAGE/$ACTIVITY" >/dev/null 2>&1 || true
-              sleep 8
-              PID2="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
-              if [ -z "$PID2" ]; then
-                echo "RESTART_CRASH_CONFIRMED attempt=$ATTEMPT"
-                repair
-                continue
-              fi
-              echo "RUNTIME_STARTUP_SURVIVED"
-              cp "$APK_FILE" "$GITHUB_WORKSPACE/final-apk/KUNAL-Universal-Video-debug.apk"
-              echo "VERIFIED_APK_READY"
-              exit 0
-            done
-            echo "ALL_AUTONOMOUS_ATTEMPTS_EXHAUSTED"
-            exit 1
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
 
       - name: Upload final APK and evidence
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: KUNAL-Universal-Video-VERIFIED-APK
           path: final-apk/KUNAL-Universal-Video-debug.apk
@@ -156,8 +77,8 @@ jobs:
 
       - name: Upload runtime evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: KUNAL-Universal-Video-runtime-evidence
           path: runtime-evidence/
-          if-no-files-found: warn
+          if-no-files-found: ignore
