@@ -4,9 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip"
       - "KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip"
-      - "KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT.zip"
       - ".github/workflows/runtime-diagnostic.yml"
       - ".github/workflows/runtime-watchdog.yml"
       - ".github/scripts/runtime-diagnostic.sh"
@@ -26,22 +24,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
 
-      - name: Locate Android project package
+      - name: Locate authoritative Android project
         shell: bash
         run: |
           set -euo pipefail
-          ZIP_FILE=""
-          for candidate in KUNAL_CHROMATOON_7LAYER_GITHUB_PACKAGE.zip KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT.zip; do
-            if [ -f "$candidate" ]; then ZIP_FILE="$candidate"; break; fi
-          done
-          test -n "$ZIP_FILE"
+          ZIP_FILE="KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip"
+          test -s "$ZIP_FILE"
           rm -rf verification-package
           mkdir -p verification-package
           unzip -q "$ZIP_FILE" -d verification-package
           PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
           test -n "$PROJECT_DIR"
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Using $ZIP_FILE"
+          echo "AUTHORITATIVE_PROJECT=$ZIP_FILE"
 
       - name: Set up Java 17
         uses: actions/setup-java@v5
