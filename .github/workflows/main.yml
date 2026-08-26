@@ -2,12 +2,12 @@ name: Build KUNAL Universal Video APK
 
 on:
   workflow_dispatch:
+  pull_request:
   push:
     paths:
       - "*.zip"
-      - "activity_fixed.kt"
-      - "pro_repair_v3.py"
-      - "preflight_patch.py"
+      - "*.kt"
+      - "*.py"
       - ".github/workflows/main.yml"
 
 jobs:
@@ -75,12 +75,20 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim
           disable-animations: true
           script: |
+            set -e
             adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            adb shell am force-stop com.kunal.universalvideo || true
             adb shell am start -n com.kunal.universalvideo/.MainActivity
             sleep 5
             adb shell dumpsys package com.kunal.universalvideo | grep -q 'com.kunal.universalvideo'
             adb shell dumpsys activity activities | grep -q 'com.kunal.universalvideo/.MainActivity'
-            adb logcat -d -t 300 > emulator-logcat.txt
+            adb logcat -d -t 500 > emulator-logcat.txt
+            if grep -E -q 'FATAL EXCEPTION|AndroidRuntime:.*com.kunal.universalvideo|Process: com.kunal.universalvideo' emulator-logcat.txt; then
+              echo 'APP_RUNTIME_CRASH_DETECTED=1'
+              grep -E -A12 -B4 'FATAL EXCEPTION|AndroidRuntime:.*com.kunal.universalvideo|Process: com.kunal.universalvideo' emulator-logcat.txt || true
+              exit 1
+            fi
+            echo 'APP_RUNTIME_CRASH_DETECTED=0'
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
