@@ -87,3 +87,6 @@ jobs:
           name: KUNAL-Universal-Video-runtime-evidence
           path: runtime-evidence/
           if-no-files-found: ignore
+
+      # OWNER MODE: every change that reaches this workflow is verified by the real emulator gate.
+      # A failure automatically enters autonomous-apk-doctor.yml through workflow_run.
