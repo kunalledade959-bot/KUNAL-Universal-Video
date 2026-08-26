@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Autonomous runtime gate: phone/network state is irrelevant to the GitHub runner.
 set -u
 
 cd "$PROJECT_DIR" || exit 1
@@ -31,6 +32,7 @@ wait_for_online_adb() {
       echo "ADB_READY attempt=$i"
       return 0
     fi
+    echo "ADB_WAIT attempt=$i state=${state:-unknown}"
     sleep 2
 done
   echo "ADB_NOT_READY"
@@ -46,7 +48,7 @@ for ATTEMPT in $(seq 1 30); do
   BUILD_RC=$?
   if [ "$BUILD_RC" -ne 0 ]; then
     echo "BUILD_FAIL attempt=$ATTEMPT"
-    tail -n 120 "$GITHUB_WORKSPACE/runtime-evidence/build-$ATTEMPT.log" || true
+    tail -n 160 "$GITHUB_WORKSPACE/runtime-evidence/build-$ATTEMPT.log" || true
     repair
     continue
   fi
@@ -75,6 +77,7 @@ for ATTEMPT in $(seq 1 30); do
   fi
 
   adb shell getprop sys.boot_completed > "$GITHUB_WORKSPACE/runtime-evidence/boot-$ATTEMPT.txt" 2>&1 || true
+  adb devices -l > "$GITHUB_WORKSPACE/runtime-evidence/adb-$ATTEMPT.txt" 2>&1 || true
   adb logcat -c || true
   adb uninstall "$PACKAGE" >/dev/null 2>&1 || true
 
@@ -96,6 +99,7 @@ for ATTEMPT in $(seq 1 30); do
   adb logcat -d -v threadtime > "$GITHUB_WORKSPACE/runtime-evidence/logcat-$ATTEMPT.log" || true
   adb shell dumpsys activity activities > "$GITHUB_WORKSPACE/runtime-evidence/activity-$ATTEMPT.txt" 2>&1 || true
   adb shell dumpsys window windows > "$GITHUB_WORKSPACE/runtime-evidence/window-$ATTEMPT.txt" 2>&1 || true
+  adb shell dumpsys package "$PACKAGE" > "$GITHUB_WORKSPACE/runtime-evidence/package-$ATTEMPT.txt" 2>&1 || true
 
   PID="$(adb shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)"
   echo "PID=$PID"
