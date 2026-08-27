@@ -1,0 +1,66 @@
+name: Root Cause Loop - KUNAL Universal Video
+on:
+  workflow_dispatch:
+  push:
+    branches: [root-cause-loop]
+
+jobs:
+  root-cause:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Build with full diagnostics
+        shell: bash
+        run: |
+          set +e
+          mkdir -p root-cause-evidence
+          ./gradlew --no-daemon --stacktrace --info assembleDebug 2>&1 | tee root-cause-evidence/gradle.log
+          rc=${PIPESTATUS[0]}
+          echo "$rc" > root-cause-evidence/gradle.exit
+          exit 0
+
+      - name: Extract deepest concrete cause
+        shell: bash
+        run: |
+          set +e
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('root-cause-evidence/gradle.log')
+          text=p.read_text(errors='replace') if p.exists() else ''
+          patterns=[r'(?im)^\s*Caused by:.*$',r'(?im)^\s*FATAL EXCEPTION.*$',r'(?im)^\s*ERROR:.*$',r'(?im)^\s*FAILURE:.*$',r'(?im)^\s*Execution failed for .*$',r'(?im)^\s*\* What went wrong:.*$']
+          hits=[]
+          for pat in patterns:
+              hits += re.findall(pat,text)
+          Path('root-cause-evidence/extracted-causes.txt').write_text('\n'.join(dict.fromkeys(hits)) or 'NO_CONCRETE_CAUSE_IN_BUILD_LOG',encoding='utf-8')
+          print(Path('root-cause-evidence/extracted-causes.txt').read_text())
+          PY
+
+      - name: Upload complete evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: root-cause-evidence-${{ github.run_id }}
+          path: root-cause-evidence/
+
+      - name: Fail only after evidence is captured
+        shell: bash
+        run: |
+          rc=$(cat root-cause-evidence/gradle.exit 2>/dev/null || echo 1)
+          if [ "$rc" != "0" ]; then
+            echo 'BUILD_FAILED_EVIDENCE_CAPTURED'
+            exit "$rc"
+          fi
+          echo 'BUILD_PASS — runtime evidence must be checked separately'
