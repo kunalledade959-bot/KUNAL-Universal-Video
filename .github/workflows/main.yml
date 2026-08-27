@@ -10,6 +10,9 @@ on:
       - "preflight_patch.py"
       - ".github/workflows/main.yml"
 
+permissions:
+  contents: read
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -41,10 +44,11 @@ jobs:
       - name: Verify APK artifact
         shell: bash
         run: |
+          set -euo pipefail
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
-          sha256sum KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          sha256sum KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk | tee APK_SHA256.txt
       - name: Upload APK and verification report
         uses: actions/upload-artifact@v4
         with:
@@ -53,6 +57,7 @@ jobs:
             KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
             KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
             KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
+            APK_SHA256.txt
           if-no-files-found: error
 
   emulator-smoke-test:
@@ -75,12 +80,18 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim
           disable-animations: true
           script: |
+            set -e
+            adb wait-for-device
+            adb shell 'until getprop sys.boot_completed | grep -q 1; do sleep 2; done'
             adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
-            adb shell am start -n com.kunal.universalvideo/.MainActivity
+            adb shell am force-stop com.kunal.universalvideo
+            adb shell am start -W -n com.kunal.universalvideo/.MainActivity
             sleep 5
             adb shell dumpsys package com.kunal.universalvideo | grep -q 'com.kunal.universalvideo'
             adb shell dumpsys activity activities | grep -q 'com.kunal.universalvideo/.MainActivity'
-            adb logcat -d -t 300 > emulator-logcat.txt
+            adb shell pidof com.kunal.universalvideo
+            adb logcat -d -t 500 > emulator-logcat.txt
+            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\.kunal\.universalvideo.*has died' emulator-logcat.txt
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
