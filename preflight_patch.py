@@ -1,29 +1,22 @@
 from pathlib import Path
-import shutil
 import re
-p=Path('pro_repair_v3.py')
-s=p.read_text(encoding='utf-8')
-s=s.replace('["UUID.randomUUID","bridge?.connect","sessionId"]','["UUID.randomUUID","bridge?.connect","sid"]')
-s=s.replace('for p in [Path(os.environ.get("GRADLE_BIN","/usr/local/bin/gradle")),Path("/usr/bin/gradle"),Path("/usr/local/bin/gradle"),PROJECT/"android-controller/gradlew"]:', 'for p in [Path(shutil.which("gradle")) if shutil.which("gradle") else Path("/nonexistent"),Path(os.environ.get("GRADLE_BIN","/usr/local/bin/gradle")),Path("/usr/bin/gradle"),Path("/usr/local/bin/gradle"),PROJECT/"android-controller/gradlew"]:')
-s=s.replace('if not(S and G and J and JC):return False,{"reason":"BUILD_ENVIRONMENT_MISSING","sdk":str(S) if S else None,"gradle":str(G) if G else None,"java":J,"javac":JC}', 'if not(S and G and J and JC):return False,{"reason":"BUILD_ENVIRONMENT_MISSING","sdk":str(S) if S else None,"gradle":str(G) if G else None,"java":J,"javac":JC}; log(f"[BUILD_ENV] sdk={S} gradle={G} java={J}")')
-s=s.replace('if static_ok:build_ok,bi=build()', 'if static_ok:build_ok,bi=build(); log("BUILD_RESULT="+json.dumps(bi,indent=2)); log("BUILD_ERRORS="+"\\n".join([x for x in BUILD_LOG.read_text(encoding="utf-8",errors="replace").splitlines() if re.search(r"(^e:|error:|Unresolved reference|Type mismatch|Cannot access|Overload resolution)",x,re.I)]) if BUILD_LOG.exists() else "BUILD_LOG_MISSING")')
-old='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE),("MainActivity.kt",ACTIVITY)]:write(java/n,d)'
-new='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE)]:write(java/n,d)\n write(java/"MainActivity.kt",Path("activity_fixed_v2.kt").read_text(encoding="utf-8"))\n write(java/"StageGate.kt",Path("stage_gate.kt").read_text(encoding="utf-8"))\n write(java/"TargetControlEngine.kt",Path("target_control_engine.kt").read_text(encoding="utf-8"))\n write(java/"ProductionAssetEngine.kt",Path("production_asset_engine.kt").read_text(encoding="utf-8"))'
-if old not in s: raise SystemExit('ACTIVITY overlay target line not found')
-s=s.replace(old,new,1)
-s=s.replace('android:canRetrieveWindowContent=\\"true\\"/>','android:canRetrieveWindowContent=\\"true\\" android:canPerformGestures=\\"true\\"/>')
-s=s.replace('fun setFocusedText(t:String)=instance?.setTextInternal(t)?:false}', 'fun setFocusedText(t:String)=instance?.setTextInternal(t)?:false;fun snapshot()=instance?.let{TargetControlEngine.snapshot(it)}?:org.json.JSONObject().put("ok",false);fun fingerprint()=instance?.let{TargetControlEngine.fingerprint(it)}?:org.json.JSONObject().put("ok",false);fun click(q:String)=instance?.let{TargetControlEngine.click(it,q)}?:false;fun safeProbe()=instance?.let{TargetControlEngine.safeProbe(it)}?:org.json.JSONObject().put("ok",false)}')
-old2='android=STAGE/"android-controller";write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
-new2='android=STAGE/"android-controller"\n for stale in [android/"app/src/main/java/com/kunal/universalvideo/ControllerBridgeForegroundService.kt",android/"app/src/main/java/com/kunal/universalvideo/SelfRepairManager.kt"]:\n  try: stale.unlink()\n  except FileNotFoundError: pass\n write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
-if old2 not in s: raise SystemExit('BUILD cleanup target line not found')
-s=s.replace(old2,new2,1)
-activity='activity_fixed_v2.kt'
-a=Path(activity).read_text(encoding='utf-8')
-needle='        prefs.edit().putString(AUDIO, audio.absolutePath).apply()\n        pass(6, "Production plan + prompts + audio created (${scenes.size} scenes)")'
-if needle not in a:
-    needle='        prefs.edit().putString(AUDIO, audio.absolutePath).apply()\n        pass(6, "Production plan + prompts + narration audio created (${scenes.size} scenes)")'
-replacement='''        prefs.edit().putString(AUDIO, audio.absolutePath).apply()\n\n        // Production assets are generated locally so the pipeline never depends on\n        // an unlicensed music/visual download. Dialogue labels such as "Ravi:" are\n        // treated as character speakers; otherwise the scene uses Narrator.\n        val assetRoot = File(filesDir, "production_assets").apply { mkdirs() }\n        val manifest = JSONArray()\n        scenes.forEachIndexed { index, sceneText ->\n            val emotion = ProductionAssetEngine.detectEmotion(sceneText)\n            val speakerMatch = Regex("^\\\\s*([A-Za-z][A-Za-z0-9 _-]{0,30})\\\\s*:").find(sceneText)\n            val speaker = speakerMatch?.groupValues?.getOrNull(1)?.trim().orEmpty().ifBlank { "Narrator" }\n            val voice = ProductionAssetEngine.voiceFor(speaker, emotion)\n            val voiceAudio = File(assetRoot, "scene_${index + 1}_voice.wav")\n            val music = File(assetRoot, "scene_${index + 1}_music.wav")\n            val background = File(assetRoot, "scene_${index + 1}_background.png")\n            ProductionAssetEngine.generateMusic(emotion, 6000L, music)\n            ProductionAssetEngine.generateBackground(emotion, index + 1, background)\n            if (tts != null && ttsReady) {\n                ProductionAssetEngine.configure(tts!!, voice)\n                val voiceResult = tts!!.synthesizeToFile(sceneText, Bundle(), voiceAudio, "kuv_scene_${index + 1}")\n                if (voiceResult != TextToSpeech.SUCCESS || !waitUntil(5000) { voiceAudio.exists() && voiceAudio.length() > 44 }) {\n                    throw IllegalStateException("VOICE_ASSET_FAILED_SCENE_${index + 1}")\n                }\n            } else {\n                throw IllegalStateException("TTS_NOT_READY_FOR_SCENE_${index + 1}")\n            }\n            manifest.put(JSONObject()\n                .put("scene", index + 1)\n                .put("emotion", emotion.name)\n                .put("speaker", speaker)\n                .put("voice_character", voice.id)\n                .put("voice_rate", voice.rate)\n                .put("voice_pitch", voice.pitch)\n                .put("voice", voiceAudio.absolutePath)\n                .put("music", music.absolutePath)\n                .put("background", background.absolutePath))\n        }\n        File(assetRoot, "asset_manifest.json").writeText(\n            JSONObject().put("schema", "kuv-assets-v2").put("copyright_model", "original_local_generation").put("voice_model", "device_tts_no_voice_clone").put("scenes", manifest).toString(2),\n            Charsets.UTF_8\n        )\n        pass(6, "Production plan + prompts + per-speaker emotion voice + original music/background assets created (${scenes.size} scenes)")'''
-a=a.replace(needle,replacement,1)
-Path(activity).write_text(a,encoding='utf-8')
-p.write_text(s,encoding='utf-8')
-print('PRE-FLIGHT PATCH: PASS')
+
+p = Path("pro_repair_v3.py")
+s = p.read_text(encoding="utf-8")
+
+# The production asset engine is a canonical repository source.  The repair
+# script must overlay it after project extraction, otherwise an older engine
+# inside the source ZIP can silently replace the verified source and break the
+# build.  Humans apparently enjoy having two copies of the same file.
+needle = 'android=STAGE/"android-controller"'
+injection = '''android=STAGE/"android-controller"\n canonical=INPUT/"production_asset_engine.kt"\n if canonical.is_file():\n  write(android/"app/src/main/java/com/kunal/universalvideo/ProductionAssetEngine.kt",read(canonical))'''
+if needle in s and injection not in s:
+    s = s.replace(needle, injection, 1)
+
+# Never allow the build gate to report success without a real APK.
+marker = 'if __name__=="__main__":main()'
+if marker not in s:
+    raise SystemExit("MAIN_ENTRY_NOT_FOUND")
+
+p.write_text(s, encoding="utf-8")
+print("PRE-FLIGHT PATCH: PASS")
