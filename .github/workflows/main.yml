@@ -109,12 +109,13 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
+          target: google_apis
           profile: pixel_2
           emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
           disable-animations: true
           emulator-boot-timeout: 900
           script: |
-            set -euo pipefail
+            set -eu
             adb wait-for-device
             echo "Waiting for Android framework/package service..."
             ready=0
