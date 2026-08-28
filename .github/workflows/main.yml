@@ -8,6 +8,7 @@ on:
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
+      - ".github/scripts/emulator-smoke.sh"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -81,34 +82,13 @@ jobs:
           emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
           disable-animations: true
           emulator-boot-timeout: 900
-          script: |
-            set -eu
-            adb wait-for-device
-            echo "Waiting for Android framework/package service..."
-            ready=0
-            for i in $(seq 1 90); do
-              if adb shell getprop sys.boot_completed 2>/dev/null | grep -q '^1$' && adb shell cmd package list packages >/dev/null 2>&1; then
-                ready=1
-                break
-              fi
-              sleep 3
-            done
-            test "$ready" -eq 1
-            echo "Android package service is ready."
-            adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
-            adb shell am force-stop com.kunal.universalvideo
-            adb shell am start -W -n com.kunal.universalvideo/.MainActivity
-            sleep 5
-            adb shell dumpsys package com.kunal.universalvideo | grep -q 'com.kunal.universalvideo'
-            adb shell pidof com.kunal.universalvideo
-            adb logcat -d -t 500 > emulator-logcat.txt
-            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\\.kunal\\.universalvideo.*has died' emulator-logcat.txt
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/emulator-smoke.sh"
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-emulator-evidence
-          path: emulator-logcat.txt
+          path: |
+            emulator-logcat.txt
+            emulator-restart-logcat.txt
           if-no-files-found: ignore
-
-# Trigger fresh verified APK build from main branch.
