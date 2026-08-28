@@ -47,6 +47,31 @@ jobs:
       - name: Run autonomous repair and build
         shell: bash
         run: python3 pro_repair_v3.py
+      - name: Publish build diagnostics on failure
+        if: always()
+        shell: bash
+        run: |
+          echo "===== KUNAL UNIVERSAL VIDEO BUILD DIAGNOSTICS ====="
+          if [ -f KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log ]; then
+            cat KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
+          else
+            echo "BUILD_LOG_MISSING"
+          fi
+          echo "===== REPORT ====="
+          if [ -f KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json ]; then
+            cat KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          else
+            echo "REPORT_MISSING"
+          fi
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-build-diagnostics
+          path: |
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          if-no-files-found: warn
       - name: Verify APK artifact
         shell: bash
         run: |
