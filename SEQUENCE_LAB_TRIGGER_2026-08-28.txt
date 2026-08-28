@@ -1,0 +1,1 @@
+Trigger validation workflow for the 1..12 sequence lab. This file intentionally changes the validation branch so the existing push-triggered workflow runs. Main APK remains untouched.
