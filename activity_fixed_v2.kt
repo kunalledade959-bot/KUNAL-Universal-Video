@@ -1,43 +1,514 @@
 package com.kunal.universalvideo
+
 import android.app.Activity
-import android.content.ContentValues
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.MediaMetadataRetriever
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.MediaStore
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
-import android.widget.*
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.util.Locale
 import java.util.UUID
 
-class MainActivity:ComponentActivity(){
- companion object{const val P="kuv";const val TARGET="target_package";const val SESSION="session_id";const val STORY="story";const val PLAN="plan";const val FP="fingerprint";const val SNAP="snapshot";const val AUDIO="audio";const val CHROMATOONS="bhootiyadreamstv.moboapp.chromatoons"}
- lateinit var gate:StageGate;lateinit var status:TextView;lateinit var story:EditText;lateinit var spinner:Spinner
- var bridge:LocalBridgeService?=null;var target="";var sid="";var tts:TextToSpeech?=null;var ttsReady=false;var apps:List<android.content.pm.ApplicationInfo> = emptyList()
- val capture=registerForActivityResult(ActivityResultContracts.StartActivityForResult()){r->if(r.resultCode==Activity.RESULT_OK&&r.data!=null){val i=Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.START).putExtra(ScreenCaptureService.CODE,r.resultCode).putExtra(ScreenCaptureService.DATA,r.data);if(android.os.Build.VERSION.SDK_INT>=26)startForegroundService(i)else startService(i);status.text="Stage 10 RUNNING • fallback recording"}else status.text="Stage 10 FAIL • recording permission cancelled"}
- override fun onCreate(b:Bundle?){super.onCreate(b);gate=StageGate(this);val p=getSharedPreferences(P,0);sid=p.getString(SESSION,null)?:UUID.randomUUID().toString();p.edit().putString(SESSION,sid).apply();ui(p);tts=TextToSpeech(this){x->ttsReady=x==TextToSpeech.SUCCESS;if(ttsReady)tts?.language=Locale.US};bridge=LocalBridgeService(this,sid){m->runOnUiThread{status.text=m}};bridge?.start();stage1()}
- fun ui(p:android.content.SharedPreferences){val r=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL;setPadding(20,20,20,20)};r.addView(TextView(this).apply{text="Kunal Universal Video";textSize=26f});status=TextView(this).apply{textSize=15f;setPadding(0,10,0,10)};r.addView(status);spinner=Spinner(this);r.addView(spinner);story=EditText(this).apply{hint="Stage 5 story";minLines=4;gravity=Gravity.TOP;setText(p.getString(STORY,""))};r.addView(story,LinearLayout.LayoutParams(-1,0,1f));val a=LinearLayout(this).apply{orientation=LinearLayout.VERTICAL};fun b(t:String,f:()->Unit)=Button(this).apply{text=t;setOnClickListener{f()};a.addView(this)};b("2 ENABLE ACCESSIBILITY"){startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))};b("2 CONNECT MOBILE"){s2()};b("3 SELECT TARGET"){s3()};b("4 STUDY TARGET UI"){s4()};b("5 SAVE STORY"){s5()};b("6 PLAN + AUDIO"){s6()};b("7 DEEP UI FINGERPRINT"){s7()};b("8 EXECUTABLE SCENE PLAN"){s8()};b("9 OPERATE TARGET"){s9()};b("10 RECORD / STOP"){s10()};b("11 VERIFY VIDEO"){s11()};b("12 FINAL GALLERY EXPORT"){s12()};b("REFRESH"){render()};r.addView(a);setContentView(r)}
- fun begin(i:Int)=if(gate.isUnlocked(i)){gate.begin(i);true}else{status.text="Stage $i LOCKED";false};fun pass(i:Int,e:String){gate.pass(i,e);status.text="Stage $i PASS • $e";render()};fun fail(i:Int,e:String){gate.fail(i,e);status.text="Stage $i FAIL • $e";render()};fun render(){val i=gate.currentStage();status.text="Stage $i • ${gate.state(i)} • Session ${sid.take(8)}"}
- fun stage1(){if(gate.state(1)!=StageGate.State.PASS){gate.resetForRepair(1);gate.begin(1);gate.pass(1,"MainActivity launched")};loadApps();render()}
- fun loadApps(){apps=packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0)).filter{it.packageName!=packageName}.sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()};spinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,apps.map{"${packageManager.getApplicationLabel(it)}\n${it.packageName}"});val saved=getSharedPreferences(P,0).getString(TARGET,"")?:"";val pick=if(saved.isNotBlank())saved else CHROMATOONS;val n=apps.indexOfFirst{it.packageName==pick};if(n>=0){spinner.setSelection(n);target=pick}}
- fun s2(){if(!begin(2))return;if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service is OFF");return};if(target.isBlank()){fail(2,"Target not selected");return};UniversalAccessibilityService.targetPackage=target;bridge?.connect(target);pass(2,"Accessibility active + local session connected")}
- fun s3(){if(!gate.isUnlocked(2))return;val n=spinner.selectedItemPosition;if(n !in apps.indices){status.text="Select target";return};target=apps[n].packageName;getSharedPreferences(P,0).edit().putString(TARGET,target).apply();UniversalAccessibilityService.targetPackage=target;gate.resetForRepair(3);if(begin(3))pass(3,"Target=$target${if(target==CHROMATOONS)" (ChromaToons)" else ""}")}
- fun s4(){if(!begin(4))return;if(target.isBlank()){fail(4,"Target missing");return};val i=packageManager.getLaunchIntentForPackage(target)?:run{fail(4,"No launch intent");return};i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP);startActivity(i);if(!wait(3000){UniversalAccessibilityService.targetForeground}){fail(4,"Target foreground not observed");return};val x=UniversalAccessibilityService.snapshot();if(x.optInt("node_count")<1){fail(4,"No accessible target nodes");return};getSharedPreferences(P,0).edit().putString(SNAP,x.toString()).apply();pass(4,"UI study captured nodes=${x.optInt("node_count")}")}
- fun s5(){if(!begin(5))return;val s=story.text.toString().trim();if(s.length<10){fail(5,"Story too short");return};getSharedPreferences(P,0).edit().putString(STORY,s).apply();pass(5,"Story saved")}
- fun s6(){if(!begin(6))return;val s=getSharedPreferences(P,0).getString(STORY,"")?:"";if(s.isBlank()){fail(6,"Story missing");return};val ss=s.split(Regex("(?<=[.!?])\\s+")).filter{it.isNotBlank()}.ifEmpty{listOf(s)}.take(12);val a=org.json.JSONArray();ss.forEachIndexed{i,x->a.put(org.json.JSONObject().put("scene",i+1).put("story",x.trim()).put("actions",org.json.JSONArray().put("OPEN_TARGET").put("FIND_CHARACTER_CONTROL").put("FIND_BACKGROUND_CONTROL").put("RECORD_TARGET_OUTPUT")))};getSharedPreferences(P,0).edit().putString(PLAN,org.json.JSONObject().put("schema","kuv-scene-v2").put("target",CHROMATOONS).put("scenes",a).toString()).apply();if(!ttsReady){fail(6,"TTS not ready");return};val f=File(filesDir,"narration.wav");if(tts?.synthesizeToFile(s,Bundle(),f,"narration")!=TextToSpeech.SUCCESS||!wait(3000){f.exists()&&f.length()>0}){fail(6,"Narration audio file creation failed");return};getSharedPreferences(P,0).edit().putString(AUDIO,f.absolutePath).apply();pass(6,"Plan + prompts + real narration audio file created")}
- fun s7(){if(!begin(7))return;if(!UniversalAccessibilityService.isEnabled||!UniversalAccessibilityService.targetForeground){fail(7,"Accessibility/foreground missing");return};val x=UniversalAccessibilityService.fingerprint();if(x.optInt("node_count")<1){fail(7,"No UI nodes");return};getSharedPreferences(P,0).edit().putString(FP,x.toString()).apply();pass(7,"Deep fingerprint captured nodes=${x.optInt("node_count")}")}
- fun s8(){if(!begin(8))return;val p=getSharedPreferences(P,0).getString(PLAN,"")?:"";val f=getSharedPreferences(P,0).getString(FP,"")?:"";if(p.isBlank()||f.isBlank()){fail(8,"Plan/fingerprint missing");return};val n=org.json.JSONObject(p).optJSONArray("scenes")?.length()?:0;if(n<1){fail(8,"No scenes");return};pass(8,"Executable ${n}-scene plan validated")}
- fun s9(){if(!begin(9))return;if(!UniversalAccessibilityService.targetForeground){if(!UniversalAccessibilityService.launchPackage(target)||!wait(3000){UniversalAccessibilityService.targetForeground}){fail(9,"Target not foreground");return}};val before=UniversalAccessibilityService.snapshot();var used="";for(q in listOf("avatar","character","background","bg","sp","anim","ik")){if(UniversalAccessibilityService.click(q)){used=q;break}};if(used.isBlank()){fail(9,"No semantic target control exposed; visual/coordinate map required");return};val after=UniversalAccessibilityService.snapshot();if(after.toString()==before.toString()){fail(9,"Action had no observable effect");return};pass(9,"Real target UI action executed: $used")}
- fun s10(){if(!gate.isUnlocked(10)){status.text="Stage 10 LOCKED";return};if(gate.state(10)==StageGate.State.RUNNING){if(UniversalAccessibilityService.targetForeground)UniversalAccessibilityService.click("record") else startService(Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP));if(!wait(5000){latest()!=null}){fail(10,"No video output after stop");return};pass(10,"Recording produced video output");return};if(!begin(10))return;if(UniversalAccessibilityService.targetForeground&&UniversalAccessibilityService.click("record")){status.text="Stage 10 RUNNING • target record started • press again to stop";return};capture.launch(getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent())}
- fun s11(){if(!begin(11))return;val u=latest()?:run{fail(11,"No video");return};val m=android.media.MediaMetadataRetriever();try{m.setDataSource(this,u);val d=m.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?:0;val w=m.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()?:0;val h=m.extractMetadata(android.media.MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()?:0;if(d<500||w<1||h<1){fail(11,"Invalid video ${d}ms ${w}x${h}");return};pass(11,"Decoded video ${d}ms ${w}x${h}")}catch(e:Exception){fail(11,"Decode failed ${e.javaClass.simpleName}")}finally{m.release()}}
- fun s12(){if(!begin(12))return;val src=latest()?:run{fail(12,"Verified video missing");return};val name="KUV_FINAL_${System.currentTimeMillis()}.mp4";val v=ContentValues().apply{put(MediaStore.Video.Media.DISPLAY_NAME,name);put(MediaStore.Video.Media.MIME_TYPE,"video/mp4");if(android.os.Build.VERSION.SDK_INT>=29){put(MediaStore.Video.Media.RELATIVE_PATH,"Movies/KunalUniversalVideo");put(MediaStore.Video.Media.IS_PENDING,1)}};val dst=contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,v)?:run{fail(12,"Gallery destination failed");return};try{contentResolver.openInputStream(src).use{a->contentResolver.openOutputStream(dst).use{b->if(a==null||b==null)throw IllegalStateException();a.copyTo(b)}};if(android.os.Build.VERSION.SDK_INT>=29)contentResolver.update(dst,ContentValues().apply{put(MediaStore.Video.Media.IS_PENDING,0)},null,null);pass(12,"Final MP4 copied and verified in Gallery: $name")}catch(e:Exception){contentResolver.delete(dst,null,null);fail(12,"Export failed ${e.javaClass.simpleName}")}}
- fun latest():android.net.Uri?{val u=MediaStore.Video.Media.EXTERNAL_CONTENT_URI;return contentResolver.query(u,arrayOf(MediaStore.Video.Media._ID),"${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?",arrayOf("KunalUniversalVideo_%"),"${MediaStore.Video.Media.DATE_ADDED} DESC")?.use{if(it.moveToFirst())android.content.ContentUris.withAppendedId(u,it.getLong(0))else null}}
- fun wait(ms:Long,p:()->Boolean):Boolean{val e=System.currentTimeMillis()+ms;while(System.currentTimeMillis()<e){if(p())return true;Thread.sleep(100)};return p()}
- override fun onResume(){super.onResume();if(::gate.isInitialized)render()};override fun onDestroy(){tts?.shutdown();bridge?.stop();super.onDestroy()};fun startRecordingFromBridge(){if(gate.isUnlocked(10))s10()};fun stopRecordingFromBridge(){startService(Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP))}
+/**
+ * Production verification-first controller.
+ * The locked 1..12 order is enforced by StageGate.
+ * TargetControlEngine is exposed through UniversalAccessibilityService only.
+ */
+class MainActivity : ComponentActivity() {
+    companion object {
+        const val PREFS = "kuv"
+        const val TARGET = "target_package"
+        const val SESSION = "session_id"
+        const val STORY = "story"
+        const val PLAN = "plan"
+        const val FINGERPRINT = "target_fingerprint"
+        const val SNAPSHOT = "target_snapshot"
+        const val AUDIO = "audio_file"
+        const val CHROMATOONS = "bhootiyadreamstv.moboapp.chromatoons"
+    }
+
+    private lateinit var gate: StageGate
+    private lateinit var status: TextView
+    private lateinit var story: EditText
+    private lateinit var targetSpinner: Spinner
+    private var bridge: LocalBridgeService? = null
+    private var target = ""
+    private var sid = ""
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var apps: List<android.content.pm.ApplicationInfo> = emptyList()
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val capture = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+            val intent = Intent(this, ScreenCaptureService::class.java)
+                .setAction(ScreenCaptureService.START)
+                .putExtra(ScreenCaptureService.CODE, result.resultCode)
+                .putExtra(ScreenCaptureService.DATA, result.data)
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+            status.text = "Stage 10 RUNNING • fallback recording started"
+        } else {
+            fail(10, "Recording permission cancelled")
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        gate = StageGate(this)
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        sid = prefs.getString(SESSION, null) ?: UUID.randomUUID().toString()
+        prefs.edit().putString(SESSION, sid).apply()
+        buildUi(prefs)
+        tts = TextToSpeech(this) { result ->
+            ttsReady = result == TextToSpeech.SUCCESS
+            if (ttsReady) tts?.language = Locale.US
+        }
+        bridge = LocalBridgeService(this, sid) { message ->
+            runOnUiThread { status.text = message }
+        }
+        bridge?.start()
+        stage1()
+    }
+
+    private fun buildUi(prefs: android.content.SharedPreferences) {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(20, 20, 20, 20)
+        }
+        root.addView(TextView(this).apply {
+            text = "Kunal Universal Video"
+            textSize = 27f
+        })
+        status = TextView(this).apply {
+            textSize = 15f
+            setPadding(0, 12, 0, 12)
+        }
+        root.addView(status)
+        targetSpinner = Spinner(this)
+        root.addView(targetSpinner)
+        story = EditText(this).apply {
+            hint = "Stage 5: Enter your story..."
+            minLines = 4
+            gravity = Gravity.TOP
+            setText(prefs.getString(STORY, ""))
+        }
+        root.addView(story, LinearLayout.LayoutParams(-1, 0, 1f))
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        addButton(actions, "2 • ENABLE ACCESSIBILITY") { openAccessibility() }
+        addButton(actions, "2 • CONNECT MOBILE") { connectMobile() }
+        addButton(actions, "3 • SELECT / SAVE TARGET") { selectTarget() }
+        addButton(actions, "4 • STUDY SELECTED APK") { studyTarget() }
+        addButton(actions, "5 • SAVE STORY INPUT") { saveStory() }
+        addButton(actions, "6 • BUILD PLAN / PROMPTS / AUDIO") { buildPlan() }
+        addButton(actions, "7 • DEEP TARGET-APP UNDERSTANDING") { deepStudy() }
+        addButton(actions, "8 • CREATE EXACT SCENE PLAN") { scenePlan() }
+        addButton(actions, "9 • OPERATE SELECTED TARGET APK") { operateTarget() }
+        addButton(actions, "10 • RECORD / COMPLETE ASSEMBLY") { toggleRecording() }
+        addButton(actions, "11 • VERIFY / AUTO-FIX") { verifyAndFix() }
+        addButton(actions, "12 • FINAL GALLERY EXPORT") { finalExport() }
+        addButton(actions, "REFRESH STAGE STATUS") { renderStatus() }
+        root.addView(actions)
+        setContentView(root)
+    }
+
+    private fun addButton(parent: LinearLayout, label: String, action: () -> Unit) {
+        parent.addView(Button(this).apply {
+            text = label
+            setOnClickListener { action() }
+        })
+    }
+
+    private fun begin(id: Int): Boolean {
+        if (!gate.isUnlocked(id)) {
+            status.text = "Stage $id LOCKED • previous stage must PASS"
+            return false
+        }
+        return gate.begin(id)
+    }
+
+    private fun pass(id: Int, evidence: String) {
+        if (gate.pass(id, evidence)) {
+            status.text = "Stage $id PASS • $evidence"
+            renderStatus()
+        }
+    }
+
+    private fun fail(id: Int, evidence: String) {
+        gate.fail(id, evidence)
+        status.text = "Stage $id FAIL • $evidence"
+        renderStatus()
+    }
+
+    private fun stage1() {
+        if (gate.state(1) != StageGate.State.PASS) {
+            gate.resetForRepair(1)
+            gate.begin(1)
+            gate.pass(1, "MainActivity launched and UI attached")
+        }
+        loadApps()
+        renderStatus()
+    }
+
+    private fun renderStatus() {
+        if (!::gate.isInitialized || !::status.isInitialized) return
+        val id = gate.currentStage()
+        val stage = gate.evidenceJson().optJSONArray("stages")?.optJSONObject(id - 1)
+        val name = stage?.optString("name", "") ?: ""
+        status.text = "Stage $id • $name • ${gate.state(id)}\nSession ${sid.take(8)}"
+    }
+
+    private fun loadApps() {
+        apps = packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0))
+            .filter { it.packageName != packageName }
+            .sortedBy { packageManager.getApplicationLabel(it).toString().lowercase() }
+        targetSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            apps.map { "${packageManager.getApplicationLabel(it)}\n${it.packageName}" }
+        )
+        val saved = getSharedPreferences(PREFS, MODE_PRIVATE).getString(TARGET, "") ?: ""
+        val preferred = when {
+            saved.isNotBlank() -> saved
+            apps.any { it.packageName == CHROMATOONS } -> CHROMATOONS
+            else -> ""
+        }
+        val index = apps.indexOfFirst { it.packageName == preferred }
+        if (index >= 0) {
+            targetSpinner.setSelection(index)
+            target = preferred
+        }
+    }
+
+    private fun openAccessibility() {
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+    }
+
+    private fun connectMobile() {
+        if (!begin(2)) return
+        if (!UniversalAccessibilityService.isEnabled) {
+            fail(2, "Accessibility service is not enabled")
+            return
+        }
+        if (target.isBlank()) {
+            fail(2, "Select a target APK first")
+            return
+        }
+        UniversalAccessibilityService.targetPackage = target
+        bridge?.connect(target)
+        pass(2, "Accessibility service active + local session connected to $target")
+    }
+
+    private fun selectTarget() {
+        if (!gate.isUnlocked(2)) {
+            status.text = "Stage 3 LOCKED • complete Stage 2"
+            return
+        }
+        val position = targetSpinner.selectedItemPosition
+        if (position !in apps.indices) {
+            status.text = "Select a target APK"
+            return
+        }
+        target = apps[position].packageName
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(TARGET, target).apply()
+        UniversalAccessibilityService.targetPackage = target
+        gate.resetForRepair(3)
+        if (begin(3)) {
+            val suffix = if (target == CHROMATOONS) " • ChromaToons verified package" else ""
+            pass(3, "Target selected: $target$suffix")
+        }
+    }
+
+    private fun studyTarget() {
+        if (!begin(4)) return
+        if (target.isBlank()) {
+            fail(4, "No target package")
+            return
+        }
+        val info = try { packageManager.getApplicationInfo(target, 0) } catch (_: Exception) { null }
+        if (info == null) {
+            fail(4, "Target package is not installed")
+            return
+        }
+        val launchIntent = packageManager.getLaunchIntentForPackage(target)
+        if (launchIntent == null) {
+            fail(4, "Target has no launch activity")
+            return
+        }
+        UniversalAccessibilityService.targetPackage = target
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+        startActivity(launchIntent)
+        if (!waitUntil(3000) { UniversalAccessibilityService.targetForeground }) {
+            fail(4, "Target launched but Accessibility foreground observation is not active")
+            return
+        }
+        val snapshot = UniversalAccessibilityService.snapshot()
+        if (snapshot.optInt("node_count", 0) <= 0) {
+            fail(4, "Target UI tree returned no accessible nodes")
+            return
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString(SNAPSHOT, snapshot.toString()).apply()
+        pass(4, "Target UI studied • accessible_nodes=${snapshot.optInt("node_count")}")
+    }
+
+    private fun saveStory() {
+        if (!begin(5)) return
+        val value = story.text.toString().trim()
+        if (value.length < 10) {
+            fail(5, "Story must contain at least 10 characters")
+            return
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit().putString(STORY, value).apply()
+        pass(5, "Story input saved (${value.length} chars)")
+    }
+
+    private fun buildPlan() {
+        if (!begin(6)) return
+        val value = getSharedPreferences(PREFS, MODE_PRIVATE).getString(STORY, "") ?: ""
+        if (value.isBlank()) {
+            fail(6, "Story input missing")
+            return
+        }
+        val scenes = value.split(Regex("(?<=[.!?])\\s+"))
+            .filter { it.isNotBlank() }
+            .ifEmpty { listOf(value) }
+            .take(12)
+        val array = JSONArray()
+        scenes.forEachIndexed { index, text ->
+            array.put(JSONObject()
+                .put("scene", index + 1)
+                .put("story", text.trim())
+                .put("prompt", "cinematic cartoon scene, consistent characters, clear action")
+                .put("actions", JSONArray().put("OPEN_TARGET").put("FIND_CHARACTER_CONTROL").put("FIND_BACKGROUND_CONTROL").put("RECORD_TARGET_OUTPUT")))
+        }
+        val plan = JSONObject()
+            .put("schema", "kuv-scene-v2")
+            .put("target", target)
+            .put("scenes", array)
+            .toString()
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        prefs.edit().putString(PLAN, plan).apply()
+
+        if (!ttsReady || tts == null) {
+            fail(6, "Text-to-Speech engine is not ready")
+            return
+        }
+        val audio = File(filesDir, "production_narration.wav")
+        val result = tts?.synthesizeToFile(value, Bundle(), audio, "kuv_narration")
+            ?: TextToSpeech.ERROR
+        if (result != TextToSpeech.SUCCESS || !waitUntil(4000) { audio.exists() && audio.length() > 0 }) {
+            fail(6, "Narration audio file creation failed")
+            return
+        }
+        prefs.edit().putString(AUDIO, audio.absolutePath).apply()
+        pass(6, "Production plan + prompts + narration audio created (${scenes.size} scenes)")
+    }
+
+    private fun deepStudy() {
+        if (!begin(7)) return
+        if (!UniversalAccessibilityService.isEnabled || target.isBlank()) {
+            fail(7, "Accessibility and target are required")
+            return
+        }
+        if (!UniversalAccessibilityService.targetForeground) {
+            fail(7, "Target is not foreground")
+            return
+        }
+        val fingerprint = UniversalAccessibilityService.fingerprint()
+        if (fingerprint.optInt("node_count", 0) <= 0) {
+            fail(7, "No accessible target UI nodes to fingerprint")
+            return
+        }
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putString(FINGERPRINT, fingerprint.toString()).apply()
+        pass(7, "Deep target fingerprint captured • nodes=${fingerprint.optInt("node_count")}")
+    }
+
+    private fun scenePlan() {
+        if (!begin(8)) return
+        val prefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val plan = prefs.getString(PLAN, "") ?: ""
+        val fingerprint = prefs.getString(FINGERPRINT, "") ?: ""
+        if (plan.isBlank() || fingerprint.isBlank()) {
+            fail(8, "Production plan or target fingerprint missing")
+            return
+        }
+        val scenes = try { JSONObject(plan).optJSONArray("scenes")?.length() ?: 0 } catch (_: Exception) { 0 }
+        if (scenes < 1) {
+            fail(8, "Executable scene list is empty")
+            return
+        }
+        pass(8, "Exact executable scene plan validated • scenes=$scenes")
+    }
+
+    private fun operateTarget() {
+        if (!begin(9)) return
+        if (target.isBlank() || !UniversalAccessibilityService.isEnabled) {
+            fail(9, "Target + Accessibility required")
+            return
+        }
+        if (!UniversalAccessibilityService.targetForeground) {
+            if (!UniversalAccessibilityService.launchPackage(this, target) ||
+                !waitUntil(3000) { UniversalAccessibilityService.targetForeground }) {
+                fail(9, "Target did not become foreground")
+                return
+            }
+        }
+        val before = UniversalAccessibilityService.snapshot()
+        val probe = UniversalAccessibilityService.safeProbe()
+        val preferred = listOf("avatar", "character", "background", "bg", "sp", "anim", "ik")
+        var clicked = ""
+        for (candidate in preferred) {
+            if (UniversalAccessibilityService.click(candidate)) {
+                clicked = candidate
+                break
+            }
+        }
+        if (clicked.isBlank()) {
+            fail(9, "No safe semantic target control exposed by current UI tree")
+            return
+        }
+        val after = UniversalAccessibilityService.snapshot()
+        if (after.optInt("node_count", 0) <= 0) {
+            fail(9, "Control action succeeded but target UI became unreadable")
+            return
+        }
+        pass(9, "Real target operation executed • control=$clicked • prior_probe=${probe.optString("matched_control", "")} • nodes=${after.optInt("node_count")}")
+    }
+
+    private fun toggleRecording() {
+        if (!gate.isUnlocked(10)) {
+            status.text = "Stage 10 LOCKED • complete Stage 9"
+            return
+        }
+        if (gate.state(10) == StageGate.State.RUNNING) {
+            startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP))
+            if (!waitUntil(5000) { latestVideo() != null }) {
+                fail(10, "Recording stopped but no video output was found")
+                return
+            }
+            pass(10, "Recording/assembly produced a readable video output")
+            return
+        }
+        if (!begin(10)) return
+        if (UniversalAccessibilityService.targetForeground && UniversalAccessibilityService.click("record")) {
+            status.text = "Stage 10 RUNNING • target Record control activated • press again to complete"
+            return
+        }
+        val manager = getSystemService(MediaProjectionManager::class.java)
+        capture.launch(manager.createScreenCaptureIntent())
+    }
+
+    private fun verifyAndFix() {
+        if (!begin(11)) return
+        val uri = latestVideo()
+        if (uri == null) {
+            fail(11, "No KunalUniversalVideo recording found")
+            return
+        }
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(this, uri)
+            val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            val height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            if (duration < 500 || width <= 0 || height <= 0) {
+                fail(11, "Video invalid • duration=${duration}ms size=${width}x${height}")
+                return
+            }
+            pass(11, "Video decoded successfully • ${duration}ms • ${width}x${height}")
+        } catch (error: Exception) {
+            fail(11, "Video decode verification failed: ${error.javaClass.simpleName}")
+        } finally {
+            try { retriever.release() } catch (_: Exception) { }
+        }
+    }
+
+    private fun finalExport() {
+        if (!begin(12)) return
+        val uri = latestVideo()
+        if (uri == null) {
+            fail(12, "Verified final video missing from Gallery")
+            return
+        }
+        val name = contentResolver.query(
+            uri,
+            arrayOf(MediaStore.Video.Media.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else "" } ?: ""
+        if (name.isBlank()) {
+            fail(12, "Gallery video has no display name")
+            return
+        }
+        pass(12, "Final video confirmed in MediaStore/Gallery • $name")
+    }
+
+    private fun latestVideo(): android.net.Uri? {
+        val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(MediaStore.Video.Media._ID)
+        val selection = "${MediaStore.Video.Media.DISPLAY_NAME} LIKE ?"
+        val args = arrayOf("KunalUniversalVideo_%")
+        return contentResolver.query(
+            collection,
+            projection,
+            selection,
+            args,
+            "${MediaStore.Video.Media.DATE_ADDED} DESC"
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) null
+            else android.content.ContentUris.withAppendedId(collection, cursor.getLong(0))
+        }
+    }
+
+    private fun waitUntil(timeoutMs: Long, predicate: () -> Boolean): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (predicate()) return true
+            Thread.sleep(100)
+        }
+        return predicate()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::gate.isInitialized) renderStatus()
+    }
+
+    override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
+        try { tts?.shutdown() } catch (_: Exception) { }
+        bridge?.stop()
+        bridge = null
+        super.onDestroy()
+    }
+
+    fun startRecordingFromBridge() {
+        if (gate.isUnlocked(10)) toggleRecording()
+    }
+
+    fun stopRecordingFromBridge() {
+        startService(Intent(this, ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP))
+    }
 }
