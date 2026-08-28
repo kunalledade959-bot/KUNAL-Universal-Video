@@ -8,9 +8,12 @@ on:
       - "activity_fixed.kt"
       - "activity_fixed_v2.kt"
       - "target_control_engine.kt"
+      - "scene_execution_engine.kt"
+      - "chromatoons_adapter.kt"
       - "stage_gate.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
+      - "CHROMATOONS_OPERATOR_SPEC.md"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -94,7 +97,7 @@ jobs:
             adb shell dumpsys activity activities | grep -q 'com.kunal.universalvideo/.MainActivity'
             adb shell pidof com.kunal.universalvideo
             adb logcat -d -t 500 > emulator-logcat.txt
-            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\.kunal\.universalvideo.*has died' emulator-logcat.txt
+            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\\.kunal\\.universalvideo.*has died' emulator-logcat.txt
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
