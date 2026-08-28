@@ -4,9 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
-import android.media.MediaRecorder
 import android.speech.tts.TextToSpeech
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
@@ -14,11 +12,6 @@ import java.nio.ByteOrder
 import kotlin.math.PI
 import kotlin.math.sin
 
-/**
- * Local, deterministic production asset layer.
- * No copyrighted media is downloaded: music and backgrounds are generated locally.
- * Voice uses the device TTS voice selected by Android, with conservative character/emotion shaping.
- */
 object ProductionAssetEngine {
     enum class Emotion { NEUTRAL, HAPPY, SAD, CRYING, ANGRY, FEAR, SHOCKING, CALM }
 
@@ -44,9 +37,9 @@ object ProductionAssetEngine {
     }
 
     fun voiceFor(characterId: String, emotion: Emotion): CharacterVoice {
-        val seed = characterId.hashCode().absoluteValue % 5
-        val basePitch = 0.92f + seed * 0.045f
-        val baseRate = 0.94f + (seed % 3) * 0.04f
+        val seedIndex = Math.floorMod(characterId.hashCode(), 5)
+        val basePitch = 0.92f + seedIndex.toFloat() * 0.045f
+        val baseRate = 0.94f + (seedIndex % 3).toFloat() * 0.04f
         val (r, p) = when (emotion) {
             Emotion.HAPPY -> 1.06f to 1.10f
             Emotion.SAD -> 0.88f to 0.93f
@@ -57,7 +50,11 @@ object ProductionAssetEngine {
             Emotion.CALM -> 0.90f to 0.96f
             Emotion.NEUTRAL -> 1.0f to 1.0f
         }
-        return CharacterVoice(characterId, rate = (baseRate * r).coerceIn(0.70f, 1.35f), pitch = (basePitch * p).coerceIn(0.65f, 1.35f))
+        return CharacterVoice(
+            characterId,
+            rate = (baseRate * r).coerceIn(0.70f, 1.35f),
+            pitch = (basePitch * p).coerceIn(0.65f, 1.35f)
+        )
     }
 
     fun configure(tts: TextToSpeech, voice: CharacterVoice) {
@@ -76,8 +73,7 @@ object ProductionAssetEngine {
             Emotion.ANGRY -> 146.83
             Emotion.FEAR -> 110.00
             Emotion.SHOCKING -> 329.63
-            Emotion.CALM -> 220.00
-            Emotion.NEUTRAL -> 220.00
+            Emotion.CALM, Emotion.NEUTRAL -> 220.00
         }
         val chord = doubleArrayOf(root, root * 1.25, root * 1.5)
         FileOutputStream(out).use { fos ->
@@ -90,7 +86,9 @@ object ProductionAssetEngine {
                     val t = i.toDouble() / sampleRate
                     val fade = minOf(1.0, t * 4.0, (duration / 1000.0 - t) * 4.0).coerceAtLeast(0.0)
                     val tremolo = 0.72 + 0.28 * sin(2.0 * PI * 0.7 * t)
-                    val sample = chord.mapIndexed { idx, f -> sin(2.0 * PI * f * t + idx * 0.7) * (0.16 / (idx + 1)) }.sum() * fade * tremolo
+                    val sample = chord.mapIndexed { idx, f ->
+                        sin(2.0 * PI * f * t + idx * 0.7) * (0.16 / (idx + 1))
+                    }.sum() * fade * tremolo
                     val value = (sample.coerceIn(-0.95, 0.95) * Short.MAX_VALUE).toInt().toShort()
                     buf[p++] = (value.toInt() and 0xff).toByte()
                     buf[p++] = ((value.toInt() shr 8) and 0xff).toByte()
@@ -103,7 +101,8 @@ object ProductionAssetEngine {
     }
 
     fun generateBackground(emotion: Emotion, sceneIndex: Int, out: File): Boolean {
-        val w = 1280; val h = 720
+        val w = 1280
+        val h = 720
         val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -137,10 +136,19 @@ object ProductionAssetEngine {
         val dataSize = frames * 2
         val total = 36 + dataSize
         val h = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN)
-        h.put("RIFF".toByteArray()); h.putInt(total); h.put("WAVE".toByteArray())
-        h.put("fmt ".toByteArray()); h.putInt(16); h.putShort(1); h.putShort(1)
-        h.putInt(sampleRate); h.putInt(sampleRate * 2); h.putShort(2); h.putShort(16)
-        h.put("data".toByteArray()); h.putInt(dataSize)
+        h.put("RIFF".toByteArray())
+        h.putInt(total)
+        h.put("WAVE".toByteArray())
+        h.put("fmt ".toByteArray())
+        h.putInt(16)
+        h.putShort(1)
+        h.putShort(1)
+        h.putInt(sampleRate)
+        h.putInt(sampleRate * 2)
+        h.putShort(2)
+        h.putShort(16)
+        h.put("data".toByteArray())
+        h.putInt(dataSize)
         out.write(h.array())
     }
 }
