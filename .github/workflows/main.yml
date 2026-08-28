@@ -6,6 +6,9 @@ on:
     paths:
       - "*.zip"
       - "activity_fixed.kt"
+      - "activity_fixed_v2.kt"
+      - "target_control_engine.kt"
+      - "stage_gate.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
       - ".github/workflows/main.yml"
@@ -99,5 +102,3 @@ jobs:
           name: KUNAL-Universal-Video-emulator-evidence
           path: emulator-logcat.txt
           if-no-files-found: ignore
-
-# Trigger fresh verified APK build from main branch.
