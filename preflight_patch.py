@@ -12,6 +12,7 @@ new='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRI
 if old not in s: raise SystemExit('ACTIVITY overlay target line not found')
 s=s.replace(old,new,1)
 s=s.replace('android:canRetrieveWindowContent=\\"true\\"/>','android:canRetrieveWindowContent=\\"true\\" android:canPerformGestures=\\"true\\"/>')
+s=s.replace('fun setFocusedText(t:String)=instance?.setTextInternal(t)?:false}', 'fun setFocusedText(t:String)=instance?.setTextInternal(t)?:false;fun snapshot()=instance?.let{TargetControlEngine.snapshot(it)}?:org.json.JSONObject().put("ok",false);fun fingerprint()=instance?.let{TargetControlEngine.fingerprint(it)}?:org.json.JSONObject().put("ok",false);fun click(q:String)=instance?.let{TargetControlEngine.click(it,q)}?:false;fun safeProbe()=instance?.let{TargetControlEngine.safeProbe(it)}?:org.json.JSONObject().put("ok",false)}')
 old2='android=STAGE/"android-controller";write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
 new2='android=STAGE/"android-controller"\n for stale in [android/"app/src/main/java/com/kunal/universalvideo/ControllerBridgeForegroundService.kt",android/"app/src/main/java/com/kunal/universalvideo/SelfRepairManager.kt"]:\n  try: stale.unlink()\n  except FileNotFoundError: pass\n write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
 if old2 not in s: raise SystemExit('BUILD cleanup target line not found')
