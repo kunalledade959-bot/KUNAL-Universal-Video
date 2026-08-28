@@ -12,6 +12,7 @@ on:
       - "chromatoons_adapter.kt"
       - "stage_gate.kt"
       - "pro_repair_v3.py"
+      - "post_compile_repair.py"
       - "preflight_patch.py"
       - "CHROMATOONS_OPERATOR_SPEC.md"
       - ".github/workflows/main.yml"
@@ -46,23 +47,24 @@ jobs:
         run: python3 preflight_patch.py
       - name: Run autonomous repair and build
         shell: bash
-        run: python3 pro_repair_v3.py
+        run: |
+          set +e
+          python3 pro_repair_v3.py
+          rc=$?
+          if [ "$rc" -ne 0 ]; then
+            echo "V3 canonical build blocked. Running deterministic post-compile repair..."
+            python3 post_compile_repair.py
+            rc=$?
+          fi
+          exit "$rc"
       - name: Publish build diagnostics on failure
         if: always()
         shell: bash
         run: |
           echo "===== KUNAL UNIVERSAL VIDEO BUILD DIAGNOSTICS ====="
-          if [ -f KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log ]; then
-            cat KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
-          else
-            echo "BUILD_LOG_MISSING"
-          fi
+          if [ -f KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log ]; then cat KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log; else echo "BUILD_LOG_MISSING"; fi
           echo "===== REPORT ====="
-          if [ -f KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json ]; then
-            cat KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
-          else
-            echo "REPORT_MISSING"
-          fi
+          if [ -f KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json ]; then cat KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json; else echo "REPORT_MISSING"; fi
       - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
