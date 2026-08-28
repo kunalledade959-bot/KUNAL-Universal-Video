@@ -1,0 +1,94 @@
+name: Verified KUNAL Universal Video APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/verified-emulator.yml"
+      - ".github/scripts/emulator-smoke-verified.sh"
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
+      - name: Apply deterministic preflight patch
+        run: python3 preflight_patch.py
+      - name: Run autonomous repair and build
+        run: python3 pro_repair_v3.py
+      - name: Verify APK artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-APK
+          path: |
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          if-no-files-found: error
+
+  emulator-smoke-test:
+    needs: build-apk
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-APK
+          path: artifact
+      - name: Android emulator smoke test
+        id: smoke
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot-save
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: bash "$GITHUB_WORKSPACE/.github/scripts/emulator-smoke-verified.sh"
+      - name: Verify smoke-test result
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -s emulator-smoke-PASS.txt ]; then
+            cat emulator-smoke-PASS.txt
+            echo "Verified emulator smoke test passed."
+            exit 0
+          fi
+          echo "No verified smoke-test PASS sentinel was produced."
+          if [ -f emulator-smoke-FAIL.txt ]; then cat emulator-smoke-FAIL.txt; fi
+          exit 1
+      - name: Upload emulator evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-emulator-evidence
+          path: |
+            emulator-logcat.txt
+            emulator-restart-logcat.txt
+            emulator-smoke-PASS.txt
+            emulator-smoke-FAIL.txt
+          if-no-files-found: ignore
