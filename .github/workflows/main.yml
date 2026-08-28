@@ -99,3 +99,5 @@ jobs:
           name: KUNAL-Universal-Video-emulator-evidence
           path: emulator-logcat.txt
           if-no-files-found: ignore
+
+# Trigger fresh verified APK build from main branch.
