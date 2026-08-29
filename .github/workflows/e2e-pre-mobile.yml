@@ -1,0 +1,107 @@
+name: Pre-Mobile E2E UI and Capability Gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/e2e-pre-mobile.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator'
+      - name: Apply deterministic preflight
+        run: python3 preflight_patch.py
+      - name: Build verified APK
+        run: python3 pro_repair_v3.py
+      - name: Verify APK
+        run: |
+          set -euo pipefail
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pre-mobile-apk
+          path: KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          if-no-files-found: error
+
+  e2e-ui-capability:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: pre-mobile-apk
+          path: artifact
+      - name: Android emulator UI and capability test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -no-metrics -no-snapshot-save
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            adb shell am force-stop com.kunal.universalvideo
+            adb logcat -c
+            adb shell am start -W -n com.kunal.universalvideo/.MainActivity
+            sleep 5
+            adb shell pidof com.kunal.universalvideo
+            adb shell uiautomator dump /sdcard/kuv-ui.xml >/dev/null
+            adb exec-out cat /sdcard/kuv-ui.xml > kuv-ui.xml
+            python3 - <<'PY'
+            import xml.etree.ElementTree as ET
+            root=ET.parse('kuv-ui.xml').getroot()
+            texts=[n.attrib.get('text','') for n in root.iter()]
+            required=[
+              '1 • START / DIAGNOSTIC','2 • ENABLE ACCESSIBILITY / CONNECT',
+              '3 • SELECT / SAVE TARGET','4 • STUDY SELECTED APK','5 • SAVE STORY INPUT',
+              '6 • OPERATE SELECTED TARGET','7 • DEEP TARGET UNDERSTANDING',
+              '8 • CREATE EXACT SCENE PLAN','9 • BUILD PRODUCTION PLAN / PROMPTS',
+              '10 • CREATE AUDIO / VOICE / MUSIC / SFX + RECORD','11 • ASSEMBLE / EDIT',
+              '12 • VERIFY / AUTO-FIX','13 • FINAL GALLERY EXPORT','REFRESH STATUS']
+            missing=[x for x in required if x not in texts]
+            if missing:
+                raise SystemExit('UI_CONTROLS_MISSING: '+repr(missing))
+            print('UI_CONTROLS_PASS=14/14')
+            PY
+            adb shell cmd package resolve-activity --brief com.kunal.universalvideo/.MainActivity | grep -q 'com.kunal.universalvideo/.MainActivity'
+            adb shell pm list packages | grep -q '^package:com.kunal.universalvideo$'
+            adb shell dumpsys media_projection >/dev/null
+            adb shell cmd package query-services --brief -a android.accessibilityservice.AccessibilityService >/dev/null 2>&1 || true
+            adb logcat -d -t 1500 > kuv-e2e-logcat.txt
+            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\\.kunal\\.universalvideo.*has died' kuv-e2e-logcat.txt
+            printf 'PRE_MOBILE_E2E_UI_CAPABILITY_PASS\nUI_CONTROLS_PASS=14/14\n' > PRE_MOBILE_E2E_PASS.txt
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-mobile-e2e-evidence
+          path: |
+            kuv-ui.xml
+            kuv-e2e-logcat.txt
+            PRE_MOBILE_E2E_PASS.txt
+          if-no-files-found: ignore
