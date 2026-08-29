@@ -23,8 +23,11 @@ test -s "$ZIP"
 test -s activity_fixed.kt
 
 grep -Eq "private fun ${fn}\\(" activity_fixed.kt
-
-grep -Eq "if\(!begin\(${STAGE}\)\)return" activity_fixed.kt
+# Stage 1 is the bootstrap/self-diagnostic stage and intentionally has no
+# previous-stage begin() gate. Stages 2..13 must explicitly honor their gate.
+if [ "$STAGE" -gt 1 ]; then
+  grep -Eq "if\(!begin\(${STAGE}\)\)return" activity_fixed.kt
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
