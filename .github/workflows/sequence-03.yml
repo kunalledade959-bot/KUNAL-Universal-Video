@@ -1,0 +1,13 @@
+name: Sequence 03 - Target Selection
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence-03:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Sequence 03
+        run: bash .github/scripts/sequence-stage-check.sh 3
