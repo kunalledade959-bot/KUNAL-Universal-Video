@@ -11,7 +11,36 @@ exec > >(tee "$LOG") 2>&1
 fail(){ echo "E2E_FAIL: $1" | tee "$FAIL"; exit 1; }
 [ -s "$APK" ] || fail "APK missing"
 
-adb install -r "$APK" >/dev/null || fail "APK install failed"
+# The hosted Linux runner may boot the API-35 emulator with software
+# acceleration. In that mode boot_completed can become true before the
+# package manager/ADB transport is actually ready for installs. Wait for a
+# stable transport and package service before touching the APK.
+ADB_READY=0
+for attempt in $(seq 1 45); do
+  adb start-server >/dev/null 2>&1 || true
+  STATE="$(adb get-state 2>/dev/null || true)"
+  if [ "$STATE" = "device" ] && adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' | grep -qx '1'; then
+    if adb shell cmd package list packages >/dev/null 2>&1; then
+      ADB_READY=1
+      break
+    fi
+  fi
+  if [ "$STATE" = "offline" ]; then
+    adb reconnect offline >/dev/null 2>&1 || true
+  fi
+  sleep 2
+done
+[ "$ADB_READY" -eq 1 ] || fail "ADB/package service did not become ready"
+
+# Install without streaming to avoid a second transport failure on slow,
+# software-rendered hosted emulators.
+adb install --no-streaming -r "$APK" >/dev/null || {
+  adb reconnect offline >/dev/null 2>&1 || true
+  sleep 3
+  adb get-state 2>/dev/null | grep -qx 'device' || fail "ADB transport lost before APK install retry"
+  adb shell cmd package list packages >/dev/null 2>&1 || fail "Package service unavailable before APK install retry"
+  adb install --no-streaming -r "$APK" >/dev/null || fail "APK install failed"
+}
 adb shell am force-stop "$PKG"
 adb logcat -c
 adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-start.txt 2>&1 || fail "MainActivity launch failed"
