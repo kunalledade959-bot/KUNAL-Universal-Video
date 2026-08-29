@@ -46,3 +46,5 @@ jobs:
             e2e-*.json
             e2e-*.log
           if-no-files-found: warn
+
+# Manual verification trigger: keep E2E gate runnable from Actions UI.
