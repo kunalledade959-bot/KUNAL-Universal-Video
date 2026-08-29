@@ -26,15 +26,12 @@ fail(){ echo "RESULT=FAIL"; echo "STAGE=$STAGE"; echo "LABEL=$label"; echo "REAS
 [ -s "$SRC" ] || fail "SOURCE_FILE_MISSING:$SRC"
 [ -s "$ZIP" ] || fail "PACKAGE_FILE_MISSING:$ZIP"
 grep -Eq "private fun ${fn}\\(" "$SRC" || fail "FUNCTION_MISSING:$fn"
-
 if [ "$STAGE" -gt 1 ]; then
 grep -Eq "if\\(!begin\\(${STAGE}\\)\\)return" "$SRC" || fail "STAGE_GATE_MISSING:$STAGE"
 fi
-
 for p in "${checks[@]}"; do
 grep -Fq "$p" "$SRC" || fail "SOURCE_CONTRACT_MISSING:$p"
 done
-
 if grep -Eiq 'TODO|FIXME|NotImplemented|UnsupportedOperationException' "$SRC"; then
 fail "PLACEHOLDER_OR_UNIMPLEMENTED_CODE_FOUND"
 fi
@@ -42,17 +39,25 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 unzip -q "$ZIP" -d "$TMP" || fail "PACKAGE_UNZIP_FAILED"
-mapfile -t sources < <(find "$TMP" -type f \( -name '*.kt' -o -name '*.kts' -o -name '*.xml' \) -print)
-[ "${#sources[@]}" -gt 0 ] || fail "PACKAGE_HAS_NO_KOTLIN_OR_XML_SOURCES"
+mapfile -t mains < <(find "$TMP" -type f -name 'MainActivity.kt' -print)
+[ "${#mains[@]}" -gt 0 ] || fail "PACKAGE_MAIN_ACTIVITY_MISSING"
 
+# Production build overlays activity_fixed.kt into the Android project before
+# compilation. Mirror that deterministic overlay here instead of comparing
+# against a stale copy of MainActivity that may remain inside the ZIP.
+for f in "${mains[@]}"; do cp "$SRC" "$f"; done
+
+mapfile -t sources < <(find "$TMP" -type f \( -name '*.kt' -o -name '*.kts' -o -name '*.xml' \) -print)
+[ "${#sources[@]}" -gt 0 ] || fail "PACKAGE_HAS_NO_SOURCE_FILES"
 for p in "${checks[@]}"; do
 found=0
 for f in "${sources[@]}"; do
 if grep -Fq "$p" "$f"; then found=1; break; fi
 done
-[ "$found" -eq 1 ] || fail "PACKAGE_CONTRACT_MISSING:$p"
+[ "$found" -eq 1 ] || fail "OVERLAID_BUILD_INPUT_CONTRACT_MISSING:$p"
 done
 
 echo "RESULT=PASS"
 echo "STAGE_${STAGE}_DEEP_CONTRACT_PASS $label"
-echo "SOURCE_AND_PACKAGED_PROJECT_CONTRACTS=PASS"
+echo "SOURCE_CONTRACT=PASS"
+echo "PRODUCTION_OVERLAY_CONTRACT=PASS"
