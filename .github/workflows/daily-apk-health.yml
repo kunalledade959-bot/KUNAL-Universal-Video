@@ -12,6 +12,7 @@ concurrency:
 permissions:
   actions: write
   contents: read
+  issues: write
 
 jobs:
   daily-health:
@@ -84,3 +85,19 @@ jobs:
           name: daily-apk-health-report
           path: daily-sequence-results.txt
           if-no-files-found: warn
+
+      - name: Open GitHub repair alert on health failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TITLE='Daily APK Health failure'
+          OPEN="$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --limit 1 --json number --jq '.[0].number // empty')"
+          BODY="Daily APK Health Gate failed for main at $(date -u '+%Y-%m-%dT%H:%M:%SZ').\n\nRun: https://github.com/$REPO/actions/runs/${{ github.run_id }}\nGolden baseline: $GOLDEN_BASELINE_SHA\n\nInspect the failing E2E/sequence run logs before making any repair. Do not publish a replacement APK without a full verified gate."
+          if [ -n "$OPEN" ]; then
+            gh issue comment "$OPEN" --repo "$REPO" --body "$BODY"
+          else
+            gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
+          fi
