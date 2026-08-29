@@ -1,0 +1,13 @@
+name: Sequence 10 - Audio Voice Music SFX
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence-10:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Sequence 10
+        run: bash .github/scripts/sequence-stage-check.sh 10
