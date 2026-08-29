@@ -21,8 +21,10 @@ PID="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
 [ -n "$PID" ] || fail "App process not alive"
 
 # Verify the real production UI exposes all 13 numbered stage controls in order.
-adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1 || fail "UI dump failed"
-adb shell cat /sdcard/window.xml > e2e-ui.xml
+# Android emulator images can deny `adb shell cat` access to /sdcard files.
+# Stream the UIAutomator XML directly over the ADB transport instead.
+adb exec-out uiautomator dump /dev/tty > e2e-ui.xml 2>/tmp/e2e-ui-dump.err || fail "UI dump failed"
+[ -s e2e-ui.xml ] || fail "UI dump produced empty XML"
 for i in $(seq 1 13); do
   grep -Eq "${i} •" e2e-ui.xml || fail "Stage ${i} control missing from production UI"
 done
