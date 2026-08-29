@@ -78,12 +78,13 @@ jobs:
           api-level: 35
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim
-          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
+          disable-animations: false
           script: |
-            set -e
+            set -euo pipefail
             adb wait-for-device
             adb shell 'until getprop sys.boot_completed | grep -q 1; do sleep 2; done'
+            adb get-state | grep -q '^device$'
             adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
             adb shell am force-stop com.kunal.universalvideo
             adb shell am start -W -n com.kunal.universalvideo/.MainActivity
@@ -92,7 +93,7 @@ jobs:
             adb shell dumpsys activity activities | grep -q 'com.kunal.universalvideo/.MainActivity'
             adb shell pidof com.kunal.universalvideo
             adb logcat -d -t 500 > emulator-logcat.txt
-            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\.kunal\.universalvideo.*has died' emulator-logcat.txt
+            ! grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\\.kunal\\.universalvideo.*has died' emulator-logcat.txt
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
