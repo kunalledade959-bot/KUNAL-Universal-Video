@@ -1,0 +1,13 @@
+name: Sequence 07 - Deep Target Understanding
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence-07:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Sequence 07
+        run: bash .github/scripts/sequence-stage-check.sh 7
