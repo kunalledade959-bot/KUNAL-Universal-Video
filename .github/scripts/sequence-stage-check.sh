@@ -22,32 +22,20 @@ esac
 
 test -s "$SRC"
 test -s "$ZIP"
-
 grep -Eq "private fun ${fn}\\(" "$SRC"
 if [ "$STAGE" -gt 1 ]; then
   grep -Eq "if\(!begin\(${STAGE}\)\)return" "$SRC"
 fi
-
-# Deep source-level contract checks: every stage must contain the concrete
-# operation, validation, persistence/evidence, and PASS/FAIL path expected
-# for that stage. This is intentionally stricter than a function-name grep.
-for p in "${patterns[@]}"; do
-  grep -Fq "$p" "$SRC"
-done
-
-# Reject obvious placeholders / unimplemented paths in the production controller.
+for p in "${patterns[@]}"; do grep -Fq "$p" "$SRC"; done
 if grep -Eiq 'TODO|FIXME|NotImplemented|UnsupportedOperationException' "$SRC"; then
   echo "DEEP_CONTRACT_FAIL stage=$STAGE placeholder_or_unimplemented_code_found"
   exit 1
 fi
-
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 unzip -q "$ZIP" -d "$TMP"
 mapfile -t sources < <(find "$TMP" -type f \( -name '*.kt' -o -name '*.kts' -o -name '*.xml' \) -print)
 test "${#sources[@]}" -gt 0
-
-# The packaged project must carry the same stage implementation contract.
 for p in "${patterns[@]}"; do
   found=0
   for f in "${sources[@]}"; do
@@ -55,5 +43,4 @@ for p in "${patterns[@]}"; do
   done
   test "$found" -eq 1
 done
-
 printf 'STAGE_%02d_DEEP_CONTRACT_PASS %s\n' "$STAGE" "$label"
