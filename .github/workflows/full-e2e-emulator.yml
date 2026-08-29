@@ -1,0 +1,48 @@
+name: Full E2E Emulator Gate
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  full-e2e-emulator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build verified APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          if [ -x ./gradlew ]; then
+            ./gradlew assembleDebug --no-daemon
+            APK="$(find . -type f -path '*/build/outputs/apk/*.apk' | head -n1)"
+          else
+            echo 'No Gradle wrapper available' >&2
+            exit 1
+          fi
+          test -n "$APK" -a -s "$APK"
+          cp "$APK" artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+
+      - name: Start Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: Pixel_2
+          script: bash .github/scripts/full-e2e-emulator.sh
+
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-e2e-emulator-evidence
+          path: |
+            e2e-*.txt
+            e2e-*.json
+            e2e-*.log
+          if-no-files-found: warn
