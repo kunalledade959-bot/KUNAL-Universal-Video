@@ -5,7 +5,7 @@ PKG="com.kunal.universalvideo"
 PASS="e2e-PASS.txt"
 FAIL="e2e-FAIL.txt"
 LOG="e2e-log.txt"
-rm -f "$PASS" "$FAIL" "$LOG"
+rm -f "$PASS" "$FAIL" "$LOG" e2e-ui*.xml e2e-ui*.err e2e-logcat.txt
 exec > >(tee "$LOG") 2>&1
 
 fail(){ echo "E2E_FAIL: $1" | tee "$FAIL"; exit 1; }
@@ -20,14 +20,25 @@ sleep 4
 PID="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
 [ -n "$PID" ] || fail "App process not alive"
 
-# Verify the real production UI exposes all 13 numbered stage controls in order.
-# Android emulator images can deny `adb shell cat` access to /sdcard files.
-# Stream the UIAutomator XML directly over the ADB transport instead.
-adb exec-out uiautomator dump /dev/tty > e2e-ui.xml 2>/tmp/e2e-ui-dump.err || fail "UI dump failed"
-[ -s e2e-ui.xml ] || fail "UI dump produced empty XML"
-for i in $(seq 1 13); do
-  grep -Eq "${i} •" e2e-ui.xml || fail "Stage ${i} control missing from production UI"
+# Verify the real production UI exposes all 13 numbered stage controls.
+# UiAutomator may omit controls that are outside the current viewport, so test
+# both the initial hierarchy and a scrolled-to-bottom hierarchy.
+adb exec-out uiautomator dump /dev/tty > e2e-ui-top.xml 2>/tmp/e2e-ui-top-dump.err || fail "Initial UI dump failed"
+[ -s e2e-ui-top.xml ] || fail "Initial UI dump produced empty XML"
+for i in $(seq 1 11); do
+  grep -Eq "${i} •" e2e-ui-top.xml || fail "Stage ${i} control missing from production UI"
 done
+
+# Scroll the production ScrollView through several positions and retain the
+# last hierarchy. This proves stages 12 and 13 are reachable, not merely in source.
+for n in 1 2 3 4 5; do
+  adb shell input swipe 540 1650 540 350 500 >/dev/null 2>&1 || fail "UI scroll gesture failed"
+  sleep 1
+done
+adb exec-out uiautomator dump /dev/tty > e2e-ui-bottom.xml 2>/tmp/e2e-ui-bottom-dump.err || fail "Bottom UI dump failed"
+[ -s e2e-ui-bottom.xml ] || fail "Bottom UI dump produced empty XML"
+grep -Eq "12 •" e2e-ui-bottom.xml || fail "Stage 12 control not reachable in production UI"
+grep -Eq "13 •" e2e-ui-bottom.xml || fail "Stage 13 control not reachable in production UI"
 
 # Exercise the dependency gate: stage 2 must not silently pass before accessibility is enabled.
 adb shell input tap 300 0 >/dev/null 2>&1 || true
