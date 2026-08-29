@@ -5,35 +5,57 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   full-e2e-emulator:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build verified APK
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
+
+      - name: Build verified APK using production build path
         shell: bash
         run: |
           set -euo pipefail
+          python3 preflight_patch.py
+          python3 pro_repair_v3.py
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           mkdir -p artifact
-          if [ -x ./gradlew ]; then
-            ./gradlew assembleDebug --no-daemon
-            APK="$(find . -type f -path '*/build/outputs/apk/*.apk' | head -n1)"
-          else
-            echo 'No Gradle wrapper available' >&2
-            exit 1
-          fi
-          test -n "$APK" -a -s "$APK"
-          cp "$APK" artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
 
-      - name: Start Android emulator
+      - name: Start Android emulator and run full E2E gate
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
           arch: x86_64
-          profile: Pixel_2
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim
+          disable-animations: true
           script: bash .github/scripts/full-e2e-emulator.sh
 
       - name: Upload E2E evidence
@@ -43,6 +65,7 @@ jobs:
           name: full-e2e-emulator-evidence
           path: |
             e2e-*.txt
+            e2e-*.xml
             e2e-*.json
             e2e-*.log
           if-no-files-found: warn
