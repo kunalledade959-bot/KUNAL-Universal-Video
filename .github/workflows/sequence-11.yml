@@ -1,0 +1,13 @@
+name: Sequence 11 - Assemble Edit
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence-11:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Sequence 11
+        run: bash .github/scripts/sequence-stage-check.sh 11
