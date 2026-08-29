@@ -1,0 +1,13 @@
+name: Sequence 05 - Story Input
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence-05:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Sequence 05
+        run: bash .github/scripts/sequence-stage-check.sh 5
