@@ -1,0 +1,86 @@
+name: Daily APK Health Gate
+
+on:
+  schedule:
+    - cron: '30 2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-universal-video-daily-health
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  daily-health:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      REPO: ${{ github.repository }}
+      GOLDEN_BASELINE_SHA: d7a0dd6f730808568c68df678cce54c703494537
+    steps:
+      - name: Verify golden baseline reference
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "Golden verified baseline: $GOLDEN_BASELINE_SHA"
+          gh api "repos/$REPO/commits/$GOLDEN_BASELINE_SHA" >/dev/null
+          echo 'Baseline commit is reachable.'
+
+      - name: Launch full production E2E gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          START_EPOCH="$(date +%s)"
+          gh workflow run full-e2e-emulator.yml --repo "$REPO" --ref main
+          for i in {1..30}; do
+            RUN_JSON="$(gh run list --repo "$REPO" --workflow full-e2e-emulator.yml --branch main --limit 5 --json databaseId,headSha,status,conclusion,createdAt)"
+            RUN_ID="$(echo "$RUN_JSON" | jq -r --arg sha "$(gh api "repos/$REPO/commits/main" --jq .sha)" --argjson start "$START_EPOCH" '[.[] | select(.headSha==$sha) | select((.createdAt | fromdateiso8601) >= $start)] | .[0].databaseId // empty')"
+            if [ -n "$RUN_ID" ]; then echo "FULL_E2E_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"; break; fi
+            sleep 10
+          done
+          test -n "${RUN_ID:-}"
+
+      - name: Launch 13 independent sequence gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          for n in $(seq -w 1 13); do
+            gh workflow run "sequence-$n.yml" --repo "$REPO" --ref main
+          done
+          echo '13 independent sequence workflows dispatched.'
+
+      - name: Wait for full E2E gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run watch "$FULL_E2E_RUN_ID" --repo "$REPO" --exit-status
+
+      - name: Collect latest independent sequence results
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          : > daily-sequence-results.txt
+          failed=0
+          for n in $(seq -w 1 13); do
+            JSON="$(gh run list --repo "$REPO" --workflow "sequence-$n.yml" --branch main --limit 5 --json databaseId,headSha,status,conclusion,createdAt)"
+            ROW="$(echo "$JSON" | jq -r --arg sha "$CURRENT_SHA" '[.[] | select(.headSha==$sha)] | .[0] | [(.databaseId|tostring), .status, (.conclusion // "")] | @tsv')"
+            echo "Sequence $n: $ROW" | tee -a daily-sequence-results.txt
+            CONCLUSION="$(echo "$ROW" | awk -F '\t' '{print $3}')"
+            if [ "$CONCLUSION" != 'success' ]; then failed=1; fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo 'One or more independent sequence gates did not pass.'
+            exit 1
+          fi
+
+      - name: Publish daily health report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daily-apk-health-report
+          path: daily-sequence-results.txt
+          if-no-files-found: warn
