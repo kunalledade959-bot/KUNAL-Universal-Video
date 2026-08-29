@@ -1,0 +1,13 @@
+name: Sequence 09 - Production Plan
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sequence-09:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Sequence 09
+        run: bash .github/scripts/sequence-stage-check.sh 9
