@@ -1,0 +1,1 @@
+Trigger only the Full E2E Emulator Gate. This file is test infrastructure and must not be used as application source.
