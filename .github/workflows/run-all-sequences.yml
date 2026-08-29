@@ -1,0 +1,26 @@
+name: Run All Sequences Independently
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/run-all-sequences.yml"
+permissions:
+  actions: write
+  contents: read
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Launch 13 independent sequence runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for n in $(seq -w 1 13); do
+            echo "DISPATCH sequence-${n}.yml"
+            gh workflow run "sequence-${n}.yml" --repo "$REPO" --ref main &
+          done
+          wait
+          echo "ALL_13_DISPATCH_REQUESTS_SENT"
