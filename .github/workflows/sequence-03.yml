@@ -1,6 +1,10 @@
 name: Sequence 03 - Target Selection
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'sequence-test-trigger.txt'
 permissions:
   contents: read
 jobs:
