@@ -7,6 +7,28 @@ s=s.replace('["UUID.randomUUID","bridge?.connect","sessionId"]','["UUID.randomUU
 s=s.replace('for p in [Path(os.environ.get("GRADLE_BIN","/usr/local/bin/gradle")),Path("/usr/bin/gradle"),Path("/usr/local/bin/gradle"),PROJECT/"android-controller/gradlew"]:', 'for p in [Path(shutil.which("gradle")) if shutil.which("gradle") else Path("/nonexistent"),Path(os.environ.get("GRADLE_BIN","/usr/local/bin/gradle")),Path("/usr/bin/gradle"),Path("/usr/local/bin/gradle"),PROJECT/"android-controller/gradlew"]:')
 s=s.replace('if not(S and G and J and JC):return False,{"reason":"BUILD_ENVIRONMENT_MISSING","sdk":str(S) if S else None,"gradle":str(G) if G else None,"java":J,"javac":JC}', 'if not(S and G and J and JC):return False,{"reason":"BUILD_ENVIRONMENT_MISSING","sdk":str(S) if S else None,"gradle":str(G) if G else None,"java":J,"javac":JC}; log(f"[BUILD_ENV] sdk={S} gradle={G} java={J}")')
 s=s.replace('if static_ok:build_ok,bi=build()', 'if static_ok:build_ok,bi=build(); log("BUILD_RESULT="+json.dumps(bi,indent=2)); log("BUILD_ERRORS="+"\\n".join([x for x in BUILD_LOG.read_text(encoding="utf-8",errors="replace").splitlines() if re.search(r"(^e:|error:|Unresolved reference|Type mismatch|Cannot access|Overload resolution)",x,re.I)]) if BUILD_LOG.exists() else "BUILD_LOG_MISSING")')
+
+# Patch the production UI source before pro_repair_v3.py copies activity_fixed.kt into the build.
+# The previous layout gave the story editor weight=1, leaving the lower stage buttons outside
+# the viewport. Keep all 13 controls in a ScrollView so the real UI hierarchy exposes them.
+activity=Path('activity_fixed.kt')
+if activity.is_file():
+    a=activity.read_text(encoding='utf-8')
+    old_story='root.addView(story,LinearLayout.LayoutParams(-1,0,1f))'
+    new_story='root.addView(story,LinearLayout.LayoutParams(-1,180))'
+    if old_story not in a:
+        raise SystemExit('UI FIX: story layout target not found')
+    a=a.replace(old_story,new_story,1)
+    old_end='button("REFRESH STATUS"){renderStatus()};root.addView(actions);setContentView(root)'
+    new_end='button("REFRESH STATUS"){renderStatus()};val scroll=ScrollView(this);scroll.isFillViewport=true;scroll.addView(actions);root.addView(scroll,LinearLayout.LayoutParams(-1,0,1f));setContentView(root)'
+    if old_end not in a:
+        raise SystemExit('UI FIX: actions layout target not found')
+    a=a.replace(old_end,new_end,1)
+    activity.write_text(a,encoding='utf-8')
+    print('UI SCROLL FIX: PASS')
+else:
+    raise SystemExit('UI FIX: activity_fixed.kt missing')
+
 old='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE),("MainActivity.kt",ACTIVITY)]:write(java/n,d)'
 new='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE)]:write(java/n,d)\n write(java/"MainActivity.kt",Path("activity_fixed.kt").read_text(encoding="utf-8"))\n write(java/"StageGate.kt",Path("stage_gate.kt").read_text(encoding="utf-8"))'
 if old not in s: raise SystemExit('ACTIVITY overlay target line not found')
