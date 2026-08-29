@@ -1,4 +1,4 @@
-name: Run All Sequences Independently
+name: Run All Systems Independently
 on:
   workflow_dispatch:
   push:
@@ -11,7 +11,7 @@ jobs:
   launch:
     runs-on: ubuntu-latest
     steps:
-      - name: Launch 13 independent sequence runs
+      - name: Launch 13 independent system runs in parallel
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -19,8 +19,8 @@ jobs:
         run: |
           set -euo pipefail
           for n in $(seq -w 1 13); do
-            echo "DISPATCH sequence-${n}.yml"
+            echo "DISPATCH system-${n} (sequence-${n}.yml)"
             gh workflow run "sequence-${n}.yml" --repo "$REPO" --ref main &
           done
           wait
-          echo "ALL_13_DISPATCH_REQUESTS_SENT"
+          echo "ALL_13_INDEPENDENT_SYSTEM_RUN_REQUESTS_SENT"
