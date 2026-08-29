@@ -1,6 +1,10 @@
 name: Sequence 12 - Verify Auto Fix
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'sequence-test-trigger.txt'
 permissions:
   contents: read
 jobs:
