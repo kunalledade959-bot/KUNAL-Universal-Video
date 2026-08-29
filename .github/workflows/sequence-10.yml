@@ -1,6 +1,10 @@
 name: Sequence 10 - Audio Voice Music SFX
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'sequence-test-trigger.txt'
 permissions:
   contents: read
 jobs:
