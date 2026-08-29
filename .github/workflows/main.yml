@@ -100,3 +100,5 @@ jobs:
           name: KUNAL-Universal-Video-emulator-evidence
           path: emulator-logcat.txt
           if-no-files-found: ignore
+
+# Verification-only trigger: builds the exact current snapshot without changing app logic.
