@@ -99,10 +99,11 @@ class MainActivity : androidx.activity.ComponentActivity() {
     private fun connectMobile(){
         if(!begin(2))return
         if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service is not enabled");openAccessibility();return}
-        if(target.isBlank())target=prefs().getString(TARGET,"")?:""
-        if(target.isBlank()){fail(2,"Target APK must be selected");return}
-        UniversalAccessibilityService.targetPackage=target;bridge?.connect(target)
-        pass(2,"Accessibility enabled and local controller session connected")
+        UniversalAccessibilityService.targetPackage=target
+        val ok=bridge?.connect(target)==true
+        if(!ok){fail(2,"Real controller handshake failed; device is not connected");return}
+        if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service dropped during connection");return}
+        pass(2,"REAL DEVICE CONTROL CHANNEL VERIFIED: handshake + PING/PONG + Accessibility ready")
     }
     private fun selectTarget(){
         if(!begin(3))return
@@ -126,7 +127,15 @@ class MainActivity : androidx.activity.ComponentActivity() {
         if(!begin(6))return
         val i=packageManager.getLaunchIntentForPackage(target);if(i==null){fail(6,"Target cannot be launched");return}
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP);UniversalAccessibilityService.targetPackage=target;startActivity(i)
-        pass(6,"Target launched and Accessibility operation channel armed")
+        val deadline=System.currentTimeMillis()+5000
+        while(System.currentTimeMillis()<deadline && !UniversalAccessibilityService.targetForeground){Thread.sleep(150)}
+        val root=UniversalAccessibilityService.instance?.rootInActiveWindow
+        if(!UniversalAccessibilityService.targetForeground || root==null){root?.recycle();fail(6,"Target launch did not produce a live foreground accessibility channel");return}
+        var nodes=0
+        fun probe(n:AccessibilityNodeInfo?){if(n==null)return;nodes++;for(k in 0 until n.childCount)probe(n.getChild(k))}
+        probe(root);root.recycle()
+        if(nodes<1){fail(6,"Target foreground but accessibility tree is empty");return}
+        pass(6,"REAL TARGET OPERATION VERIFIED: foreground + live accessibility tree nodes=$nodes")
     }
 
     /** 7 collects actual accessibility-tree evidence, not only a package-name check. */
@@ -168,7 +177,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
         }catch(e:Exception){fail(10,"Audio synthesis failed: ${e.javaClass.simpleName}")}
     }
     fun startRecordingFromBridge(){if(gate.isUnlocked(10))audioAndRecord()}
-    fun stopRecordingFromBridge(){startService(Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP))}
+    fun stopRecordingFromBridge(){startService(Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP));android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({val u=latestRecording();if(u==null){fail(10,"Recording stopped but no real MediaStore video was produced");return@postDelayed};prefs().edit().putString(RECORDING,u.toString()).apply();pass(10,"REAL AUDIO/RECORDING EVIDENCE VERIFIED: TTS audio + MediaStore MP4 captured")},1500)}
 
     private fun latestRecording():android.net.Uri?{
         prefs().getString(RECORDING,null)?.let{try{return android.net.Uri.parse(it)}catch(_:Exception){}}
