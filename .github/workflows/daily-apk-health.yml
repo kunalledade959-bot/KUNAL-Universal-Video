@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 60
     env:
       REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
       GOLDEN_BASELINE_SHA: d7a0dd6f730808568c68df678cce54c703494537
     steps:
       - name: Verify golden baseline reference
@@ -27,7 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "Golden verified baseline: $GOLDEN_BASELINE_SHA"
-          gh api "repos/$REPO/commits/$GOLDEN_BASELINE_SHA" >/dev/null
+          gh api "repos/$REPO/commits/$GOLDEN_BASELINE_SHA" --jq '.sha' | grep -Fx "$GOLDEN_BASELINE_SHA"
           echo 'Baseline commit is reachable.'
 
       - name: Launch full production E2E gate
@@ -37,8 +38,9 @@ jobs:
           START_EPOCH="$(date +%s)"
           gh workflow run full-e2e-emulator.yml --repo "$REPO" --ref main
           for i in {1..30}; do
-            RUN_JSON="$(gh run list --repo "$REPO" --workflow full-e2e-emulator.yml --branch main --limit 5 --json databaseId,headSha,status,conclusion,createdAt)"
-            RUN_ID="$(echo "$RUN_JSON" | jq -r --arg sha "$(gh api "repos/$REPO/commits/main" --jq .sha)" --argjson start "$START_EPOCH" '[.[] | select(.headSha==$sha) | select((.createdAt | fromdateiso8601) >= $start)] | .[0].databaseId // empty')"
+            RUN_JSON="$(gh run list --repo "$REPO" --workflow full-e2e-emulator.yml --branch main --limit 10 --json databaseId,headSha,status,conclusion,createdAt)"
+            MAIN_SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+            RUN_ID="$(echo "$RUN_JSON" | jq -r --arg sha "$MAIN_SHA" --argjson start "$START_EPOCH" '[.[] | select(.headSha==$sha) | select((.createdAt | fromdateiso8601) >= $start)] | .[0].databaseId // empty')"
             if [ -n "$RUN_ID" ]; then echo "FULL_E2E_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"; break; fi
             sleep 10
           done
@@ -67,8 +69,13 @@ jobs:
           : > daily-sequence-results.txt
           failed=0
           for n in $(seq -w 1 13); do
-            JSON="$(gh run list --repo "$REPO" --workflow "sequence-$n.yml" --branch main --limit 5 --json databaseId,headSha,status,conclusion,createdAt)"
-            ROW="$(echo "$JSON" | jq -r --arg sha "$CURRENT_SHA" '[.[] | select(.headSha==$sha)] | .[0] | [(.databaseId|tostring), .status, (.conclusion // "")] | @tsv')"
+            JSON="$(gh run list --repo "$REPO" --workflow "sequence-$n.yml" --branch main --limit 20 --json databaseId,headSha,status,conclusion,createdAt)"
+            ROW="$(echo "$JSON" | jq -r --arg sha "$CURRENT_SHA" '[.[] | select(.headSha==$sha) | select(.status=="completed")] | .[0] | if . then [(.databaseId|tostring), .status, (.conclusion // "")] | @tsv else empty end')"
+            if [ -z "$ROW" ]; then
+              echo "Sequence $n: NO_COMPLETED_RUN_FOR_SHA $CURRENT_SHA" | tee -a daily-sequence-results.txt
+              failed=1
+              continue
+            fi
             echo "Sequence $n: $ROW" | tee -a daily-sequence-results.txt
             CONCLUSION="$(echo "$ROW" | awk -F '\t' '{print $3}')"
             if [ "$CONCLUSION" != 'success' ]; then failed=1; fi
@@ -95,7 +102,7 @@ jobs:
           set -euo pipefail
           TITLE='Daily APK Health failure'
           OPEN="$(gh issue list --repo "$REPO" --state open --search "$TITLE in:title" --limit 1 --json number --jq '.[0].number // empty')"
-          BODY="Daily APK Health Gate failed for main at $(date -u '+%Y-%m-%dT%H:%M:%SZ').\n\nRun: https://github.com/$REPO/actions/runs/${{ github.run_id }}\nGolden baseline: $GOLDEN_BASELINE_SHA\n\nInspect the failing E2E/sequence run logs before making any repair. Do not publish a replacement APK without a full verified gate."
+          BODY="Daily APK Health Gate failed for main at $(date -u '+%Y-%m-%dT%H:%M:%SZ').\n\nRun: https://github.com/$REPO/actions/runs/${{ github.run_id }}\nGolden baseline: $GOLDEN_BASELINE_SHA\n\nInspect the failing E2E/sequence run logs before making any repair. Do not publish a replacement APK without a full verified gate. Locked 13-stage source and the golden APK must remain unchanged unless a root-cause repair is proven and re-verified."
           if [ -n "$OPEN" ]; then
             gh issue comment "$OPEN" --repo "$REPO" --body "$BODY"
           else
