@@ -62,11 +62,14 @@ jobs:
           gh run watch "$FULL_E2E_RUN_ID" --repo "$REPO" --exit-status
 
       - name: Collect latest independent sequence results
+        if: ${{ always() }}
         shell: bash
         run: |
           set -euo pipefail
           CURRENT_SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
           : > daily-sequence-results.txt
+          echo "Main SHA: $CURRENT_SHA" | tee -a daily-sequence-results.txt
+          echo "Full E2E run: ${FULL_E2E_RUN_ID:-UNKNOWN}" | tee -a daily-sequence-results.txt
           failed=0
           for n in $(seq -w 1 13); do
             JSON="$(gh run list --repo "$REPO" --workflow "sequence-$n.yml" --branch main --limit 20 --json databaseId,headSha,status,conclusion,createdAt)"
@@ -109,12 +112,14 @@ jobs:
             gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
           fi
 
-      - name: Escalate health failure to runtime diagnosis
+      - name: Escalate health failure to Autonomous APK Doctor
         if: failure()
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo 'Daily health failed. Starting a fresh Runtime Crash Diagnostic on main.'
-          gh workflow run runtime-diagnostic.yml --repo "$REPO" --ref main
+          echo 'Daily health failed. Starting Autonomous APK Doctor with the exact health-run evidence.'
+          gh workflow run autonomous-apk-doctor.yml --repo "$REPO" --ref main \
+            -f source_workflow='Daily APK Health Gate' \
+            -f source_run_id='${{ github.run_id }}'
