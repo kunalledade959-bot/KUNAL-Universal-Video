@@ -1,0 +1,1 @@
+Temporary verification note. This branch is for validating the Daily APK Health Gate authentication repair. Golden APK and StageGate remain untouched.
