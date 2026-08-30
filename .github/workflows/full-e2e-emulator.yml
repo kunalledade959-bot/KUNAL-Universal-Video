@@ -8,12 +8,14 @@ on:
 permissions:
   contents: read
 
+env:
+  ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "30"
+  ANDROID_ADB_SERVER_PORT: "5037"
+
 jobs:
   full-e2e-emulator:
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    env:
-      ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "30"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,8 +37,17 @@ jobs:
       - name: Install Android SDK components
         shell: bash
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
+
+      - name: Start ADB server before emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb kill-server || true
+          adb start-server
+          adb devices
 
       - name: Build verified APK using production build path
         shell: bash
@@ -61,7 +72,18 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -no-metrics -camera-back none -memory 3072
           disable-animations: true
           emulator-boot-timeout: 900
-          script: bash .github/scripts/full-e2e-emulator.sh
+          script: |
+            set -euo pipefail
+            adb start-server
+            for i in $(seq 1 60); do
+              state=$(adb -s emulator-5554 get-state 2>/dev/null || true)
+              if [ "$state" = "device" ]; then
+                break
+              fi
+              sleep 2
+            done
+            test "$(adb -s emulator-5554 get-state)" = "device"
+            bash .github/scripts/full-e2e-emulator.sh
 
       - name: Upload E2E evidence
         if: always()
