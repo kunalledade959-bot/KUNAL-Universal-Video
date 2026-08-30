@@ -2,9 +2,20 @@ name: Autonomous APK Doctor
 
 on:
   workflow_run:
-    workflows: ["Runtime Crash Diagnostic"]
+    workflows: ["Runtime Crash Diagnostic", "Daily APK Health Gate"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      source_workflow:
+        description: "Workflow that supplied the failure evidence"
+        required: false
+        default: "manual"
+        type: string
+      source_run_id:
+        description: "GitHub Actions run ID containing the failure evidence"
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: kunal-universal-video-ai-doctor
@@ -27,8 +38,8 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Download failure evidence from triggering run
-        if: ${{ github.event_name == 'workflow_run' }}
+      - name: Download Runtime Crash Diagnostic evidence
+        if: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Runtime Crash Diagnostic' }}
         uses: actions/download-artifact@v5
         with:
           name: KUNAL-Universal-Video-runtime-evidence
@@ -36,8 +47,52 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Download Daily APK Health evidence
+        if: ${{ (github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Daily APK Health Gate') || (github.event_name == 'workflow_dispatch' && inputs.source_run_id != '') }}
+        uses: actions/download-artifact@v5
+        with:
+          name: daily-apk-health-report
+          path: ai-evidence
+          run-id: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Daily APK Health Gate' && github.event.workflow_run.id || inputs.source_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Collect exact triggering workflow logs
+        if: ${{ github.event_name == 'workflow_run' || inputs.source_run_id != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p ai-evidence
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+            SOURCE="${{ github.event.workflow_run.name }}"
+          else
+            RUN_ID="${{ inputs.source_run_id }}"
+            SOURCE="${{ inputs.source_workflow }}"
+          fi
+          printf 'source_workflow=%s\nsource_run_id=%s\n' "$SOURCE" "$RUN_ID" > ai-evidence/trigger-metadata.txt
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json databaseId,name,status,conclusion,headSha,createdAt,updatedAt > ai-evidence/trigger-run.json
+          gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --log-failed > ai-evidence/trigger-failed.log 2>&1 || true
+
+          if [ -f ai-evidence/daily-sequence-results.txt ]; then
+            echo 'Collecting failed child sequence/full-E2E logs referenced by the daily report.' | tee ai-evidence/child-log-collection.txt
+            while IFS= read -r line; do
+              CHILD_ID="$(echo "$line" | grep -oE 'run=[0-9]+' | cut -d= -f2 || true)"
+              if [ -n "$CHILD_ID" ]; then
+                echo "=== run $CHILD_ID ===" | tee -a ai-evidence/child-log-collection.txt
+                gh run view "$CHILD_ID" --repo "$GITHUB_REPOSITORY" --log-failed >> ai-evidence/child-failed.log 2>&1 || true
+              fi
+            done < ai-evidence/daily-sequence-results.txt
+            FULL_ID="$(grep -E '^Full E2E run: [0-9]+' ai-evidence/daily-sequence-results.txt | awk '{print $4}' || true)"
+            if [ -n "$FULL_ID" ] && [ "$FULL_ID" != "UNKNOWN" ]; then
+              echo "=== full E2E run $FULL_ID ===" | tee -a ai-evidence/child-log-collection.txt
+              gh run view "$FULL_ID" --repo "$GITHUB_REPOSITORY" --log-failed >> ai-evidence/child-failed.log 2>&1 || true
+            fi
+          fi
+
       - name: Prepare evidence for manual dispatch
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run_id == '' }}
         shell: bash
         run: |
           mkdir -p ai-evidence
@@ -54,14 +109,15 @@ jobs:
           copilot --autopilot --yolo --max-autopilot-continues 12 -p '
           You are the autonomous senior Android repair engineer for KUNAL Universal Video.
           Work directly in this checked-out repository and repair the APK, not merely the CI symptom.
-          Read ai-evidence first, then inspect the Android project ZIP and its extracted source.
-          The authoritative goal is a real working APK: build, install, launch, survive restart, and preserve the intended controller, target-app control, screen recording, and video-generation architecture.
-          Diagnose the exact root cause from evidence. Make the smallest correct source-level repair.
+          Read ALL files in ai-evidence first, especially trigger-metadata.txt, daily-sequence-results.txt, trigger-failed.log, and child-failed.log when present.
+          If the source is a Daily APK Health Gate failure, use the exact child workflow IDs and logs to identify whether the root cause is app/source, build/runtime, or CI infrastructure.
+          Diagnose the exact root cause from evidence. Do not assume an app bug when the evidence shows an infrastructure failure.
+          Make the smallest correct source-level repair only when an actual app/project defect is proven.
           You may unzip KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip, edit its Android/Kotlin/Gradle/XML sources, rebuild or run static checks, then replace the ZIP with the repaired project.
           Do NOT edit .github/workflows files. Do NOT hide warnings/errors or fake a PASS. Do NOT replace the project with a toy app.
-          Preserve working features and package com.kunal.universalvideo.
-          Before finishing, ensure KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip contains the repaired Android project and summarize the exact repair in ai-evidence/ai-repair-1.txt.
-          If the evidence shows only infrastructure failure, repair the infrastructure-compatible project/tooling without changing app behavior.
+          Preserve working features, package com.kunal.universalvideo, and the locked 13-stage production behavior.
+          Before finishing, ensure KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip contains the repaired Android project and summarize the exact diagnosis/repair in ai-evidence/ai-repair-1.txt.
+          If evidence proves the failure is CI-only and the Android project is healthy, do not modify the Android project; record the exact infrastructure diagnosis in ai-evidence/ai-repair-1.txt.
           '
 
       - name: Gate test after iteration 1
@@ -96,7 +152,7 @@ jobs:
           Continue autonomous repair of KUNAL Universal Video after a failed runtime gate.
           Read the newest runtime-evidence files and ai-repair-1.txt. Re-open the current Android project ZIP and diagnose the NEW exact failure.
           Fix the underlying Android/Kotlin/Gradle/runtime problem, not the test.
-          Preserve all existing intended features. Do not edit .github/workflows files and do not fake PASS.
+          Preserve all existing intended features and the locked 13-stage behavior. Do not edit .github/workflows files and do not fake PASS.
           Rebuild/check what can be checked on Ubuntu, then replace KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip with the improved project.
           Record the diagnosis and repair in ai-evidence/ai-repair-2.txt.
           '
@@ -132,9 +188,9 @@ jobs:
         run: |
           copilot --autopilot --yolo --max-autopilot-continues 12 -p '
           Final autonomous repair pass for KUNAL Universal Video.
-          Inspect ALL accumulated runtime/build evidence and both previous repair notes. Find the remaining root cause and fix the real Android project.
+          Inspect ALL accumulated runtime/build evidence and all previous repair notes. Find the remaining root cause and fix the real Android project.
           You are not allowed to declare success unless the APK can actually build, install, launch, and survive restart in the emulator gate.
-          Preserve the intended controller/target-app/screen-recording/video-generation architecture; do not replace it with a dummy app and do not edit workflow files.
+          Preserve the intended controller/target-app/screen-recording/video-generation architecture and the locked 13-stage behavior; do not replace it with a dummy app and do not edit workflow files.
           Replace KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip with the best corrected project and write ai-evidence/ai-repair-3.txt with the exact root cause and repair.
           '
 
