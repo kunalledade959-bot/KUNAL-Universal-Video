@@ -1,0 +1,92 @@
+name: Real Mobile Connection Production Gate
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "activity_fixed.kt"
+      - "pro_repair_v3.py"
+      - "preflight_patch.py"
+      - "mobile_connection_real_fix.py"
+      - "mobile_connection_hardening_v2.py"
+      - ".github/scripts/github_update_patch.py"
+      - ".github/workflows/real-mobile-connection-production.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install Android SDK
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
+      - name: Apply production preflight
+        run: python3 preflight_patch.py
+      - name: Apply real Accessibility connection patch
+        run: python3 mobile_connection_real_fix.py
+      - name: Apply Stage 2 binding hardening
+        run: python3 mobile_connection_hardening_v2.py
+      - name: Apply verified GitHub update channel
+        run: python3 .github/scripts/github_update_patch.py
+      - name: Build production APK
+        run: python3 pro_repair_v3.py
+      - name: Verify APK and report
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          sha256sum KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk | tee APK_SHA256.txt
+      - name: Upload APK evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-Real-Mobile-Connection
+          path: |
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
+            APK_SHA256.txt
+          if-no-files-found: error
+      - name: Android emulator E2E
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
+          disable-animations: false
+          script: bash .github/scripts/emulator-smoke.sh
+      - name: Publish verified release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="verified-apk-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
+            APK_SHA256.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Verified APK ${GITHUB_RUN_NUMBER}" \
+            --notes "Production APK verified by build + Android emulator E2E. Real Mobile Connection requires AccessibilityService binding and controller health/status verification; physical-device verification remains separate."
