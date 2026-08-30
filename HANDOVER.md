@@ -6,8 +6,7 @@
 - Project: **KUNAL Universal Video**
 - Repository: `kunalledade959-bot/KUNAL-Universal-Video`
 - Branch: `main`
-- Current verified repository HEAD at handover: `9b1f8528abcc1788ae5d067ddea90941c2741c47`
-- Current HEAD message: `chore: run runtime watchdog hourly`
+- Current HEAD after this handover update: see GitHub commit history for the latest commit.
 - Working principle: verification-first, no guessing/tukka, preserve working code, never fake PASS.
 
 ## 1. AUTHORITATIVE SOURCE / DO NOT REPLACE
@@ -59,8 +58,9 @@ The app has a persistent fail-closed StageGate with exactly 13 stages. A stage c
 - The intended flow is to operate a selected target APK through the locked 13-stage pipeline, then assemble/edit, verify/auto-fix, and export to Gallery.
 
 ## 5. CURRENT CI TEST INFRASTRUCTURE
-The repository currently contains these important workflows/scripts:
+Important workflows/scripts include:
 - `.github/workflows/daily-apk-health.yml`
+- `.github/workflows/locked-production-verification.yml` **NEW UNIFIED GATE**
 - `.github/workflows/full-e2e-emulator.yml`
 - `.github/workflows/run-all-sequences.yml`
 - `.github/workflows/verified-emulator.yml`
@@ -86,7 +86,7 @@ The Daily APK Health Gate currently defines this golden baseline:
 Latest manually dispatched Daily APK Health Gate:
 - Run: `33300477176`
 - Run number: `2`
-- Head SHA: `9b1f8528abcc1788ae5d067ddea90941c2741c47`
+- Head SHA at that run: `9b1f8528abcc1788ae5d067ddea90941c2741c47`
 - Result: **FAILURE**
 - Job: `daily-health`
 - Job ID: `99227557838`
@@ -105,70 +105,52 @@ The health report/repair-alert steps completed as designed.
 ### Important interpretation
 This failure does **NOT** prove that the APK or any of the 13 sequences failed. The run stopped before launching them. Do not report the 13 sequences as PASS or FAIL from this run.
 
-## 8. EXACT NEXT ACTION TO RUN
-### FIRST ACTION IN THE NEXT CHAT
-Run **Daily APK Health Gate** manually from GitHub Actions using `workflow_dispatch`.
+## 8. UNIFIED PRODUCTION VERIFICATION GATE
+A new workflow has now been added:
+- `.github/workflows/locked-production-verification.yml`
+- It is **manual only** (`workflow_dispatch`).
+- It does NOT modify or unlock the 13 sequence definitions.
+- It does NOT replace the locked APK.
+- It dispatches the existing `full-e2e-emulator.yml` plus `sequence-01.yml` through `sequence-13.yml`.
+- It keeps the 13 sequence results independent and records each run ID/result.
+- It fails closed if the Full E2E gate fails or any sequence does not complete successfully.
+- It uploads `locked-sequence-results.txt` as the unified evidence artifact.
+- It explicitly states that a failed unified verification does not authorize APK replacement or sequence unlock.
 
-Reason: the previous run stopped at the golden-baseline verification step, so the actual full E2E gate and all 13 independent sequence gates were never launched by that run.
+### Why this is the requested merge
+The existing **13 independent sequence verification** and the existing **full production E2E / crash-path verification** are now orchestrated by one master gate while remaining separate underneath. One button starts the verification batch; results stay separately attributable.
 
-### AFTER THAT RUN
-1. Inspect the new Daily APK Health Gate result.
-2. If baseline verification passes, allow it to launch:
-   - the full production E2E gate
-   - all 13 independent sequence gates
-3. Wait for the full E2E result.
-4. Collect the latest results for Sequence 01..13 for the **current main SHA**.
-5. Record each sequence as SUCCESS/FAILURE with its run ID.
-6. Only after the evidence is green, continue to the next technical stage.
-7. If baseline verification fails again, inspect the actual job logs/root cause before changing anything. Do not rebuild the APK merely because this gate failed.
+### Important limitation
+This unified workflow is an orchestration/verification layer. It does not magically make the APK mathematically “crash-proof.” A PASS means the defined automated gates completed successfully for that run. Real-device behavior still requires real-device evidence.
 
-## 9. 13 CI WORKFLOWS ARE INDEPENDENT
-The repo contains:
-- `sequence-01.yml`
-- `sequence-02.yml`
-- `sequence-03.yml`
-- `sequence-04.yml`
-- `sequence-05.yml`
-- `sequence-06.yml`
-- `sequence-07.yml`
-- `sequence-08.yml`
-- `sequence-09.yml`
-- `sequence-10.yml`
-- `sequence-11.yml`
-- `sequence-12.yml`
-- `sequence-13.yml`
+## 9. EXACT NEXT ACTION
+From GitHub Actions:
+1. Open **Locked Production Verification Gate**.
+2. Press **Run workflow** on `main`.
+3. Let the workflow dispatch the existing Full E2E and all 13 independent sequence workflows.
+4. Do not touch the APK or unlock any sequence while it runs.
+5. After completion, inspect the unified artifact and the individual run results.
+6. Only after actual evidence is green should we consider the verification baseline complete.
 
-Do not assume their result from the Daily Health Gate failure. The last failed Daily Health run skipped their launch.
+If the gate fails, diagnose the exact failed component. Do not rebuild the APK just because orchestration failed.
 
 ## 10. CURRENT STATE SUMMARY
 ### LOCKED / PRESERVE
 - 13-stage StageGate contract: **LOCKED**
 - Working local installed/opened APK: **LOCKED / GOLDEN**
-- Current main HEAD: `9b1f8528abcc1788ae5d067ddea90941c2741c47`
 - Golden baseline: `d7a0dd6f730808568c68df678cce54c703494537`
-- Existing CI scripts/workflows: preserve unless root-cause repair requires a change
+- Existing sequence workflows: **PRESERVE**
 
 ### VERIFIED FACTS
 - StageGate implementation is persistent and fail-closed.
 - Exactly 13 stages exist in the established order above.
 - Golden baseline commit exists and is reachable.
-- Daily Health Gate run #2 exists and failed before E2E/sequence launch.
+- Daily Health Gate run #2 failed before E2E/sequence launch.
+- Unified orchestration workflow has been added without altering the sequence workflow definitions.
 
-### NOT YET PROVEN BY THE LATEST DAILY RUN
-- Full production E2E PASS
-- Sequence 01 PASS
-- Sequence 02 PASS
-- Sequence 03 PASS
-- Sequence 04 PASS
-- Sequence 05 PASS
-- Sequence 06 PASS
-- Sequence 07 PASS
-- Sequence 08 PASS
-- Sequence 09 PASS
-- Sequence 10 PASS
-- Sequence 11 PASS
-- Sequence 12 PASS
-- Sequence 13 PASS
+### NOT YET PROVEN BY THE NEW UNIFIED GATE
+- Full production E2E PASS for the unified run
+- Sequence 01 PASS through Sequence 13 PASS for the unified run
 
 ## 11. DO NOT DO THESE THINGS
 - Do not create a replacement app.
@@ -183,12 +165,14 @@ Do not assume their result from the Daily Health Gate failure. The last failed D
 - Do not claim full E2E until actual evidence exists.
 
 ## 12. CONTINUATION COMMAND FOR A NEW CHAT
-Start by reading this file and state:
-1. Current HEAD = `9b1f8528abcc1788ae5d067ddea90941c2741c47`
-2. Golden baseline = `d7a0dd6f730808568c68df678cce54c703494537`
-3. APK = locked, do not replace
-4. 13 stages = locked fail-closed pipeline
-5. Last Daily Health run = `33300477176`, failed at baseline verification before E2E/13 sequence launch
-6. NEXT = manually run **Daily APK Health Gate**, then inspect real evidence before any repair/rebuild
+Start by reading this file and then verify the current `main` HEAD.
+
+State the following before taking action:
+1. 13-stage pipeline = locked
+2. APK = locked/golden
+3. Golden baseline = `d7a0dd6f730808568c68df678cce54c703494537`
+4. Last Daily Health run = `33300477176`, failed at baseline verification before E2E/sequence launch
+5. New unified gate = `.github/workflows/locked-production-verification.yml`
+6. NEXT = manually run **Locked Production Verification Gate**, then inspect actual evidence.
 
 This is the checkpoint. Continue from here, not from scratch.
