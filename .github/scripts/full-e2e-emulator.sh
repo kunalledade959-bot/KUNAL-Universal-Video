@@ -44,7 +44,10 @@ adb install --no-streaming -r "$APK" >/dev/null || {
 adb shell am force-stop "$PKG"
 adb logcat -c
 adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-start.txt 2>&1 || fail "MainActivity launch failed"
-sleep 4
+# Let the production UI and hosted software-rendered System UI settle before
+# the accessibility hierarchy/scroll checks. This avoids turning a slow cold
+# boot into a false UI reachability failure.
+sleep 8
 
 PID="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
 [ -n "$PID" ] || fail "App process not alive"
@@ -58,16 +61,33 @@ for i in $(seq 1 11); do
   grep -Eq "${i} •" e2e-ui-top.xml || fail "Stage ${i} control missing from production UI"
 done
 
-# Scroll the production ScrollView through several positions and retain the
-# last hierarchy. This proves stages 12 and 13 are reachable, not merely in source.
-for n in 1 2 3 4 5; do
-  adb shell input swipe 540 1650 540 350 500 >/dev/null 2>&1 || fail "UI scroll gesture failed"
-  sleep 1
-done
-adb exec-out uiautomator dump /dev/tty > e2e-ui-bottom.xml 2>/tmp/e2e-ui-bottom-dump.err || fail "Bottom UI dump failed"
-[ -s e2e-ui-bottom.xml ] || fail "Bottom UI dump produced empty XML"
-grep -Eq "12 •" e2e-ui-bottom.xml || fail "Stage 12 control not reachable in production UI"
-grep -Eq "13 •" e2e-ui-bottom.xml || fail "Stage 13 control not reachable in production UI"
+# The production activity places the 13 stage buttons inside one real
+# ScrollView. The previous five-gesture loop was unnecessarily aggressive on
+# the CPU-starved hosted emulator and, in one run, caused System UI to report
+# an ANR while the app itself was healthy. Use one long deterministic gesture
+# from inside the ScrollView, then dump the hierarchy again. If the first dump
+# is not the app hierarchy, recover the production activity once and retry the
+# same single gesture. We still require the actual Stage 12/13 nodes in the
+# resulting hierarchy, so this cannot fake reachability.
+scroll_to_bottom_and_dump(){
+  adb shell input swipe 540 1650 540 350 1000 >/dev/null 2>&1 || return 1
+  sleep 3
+  adb exec-out uiautomator dump /dev/tty > e2e-ui-bottom.xml 2>/tmp/e2e-ui-bottom-dump.err || return 1
+  [ -s e2e-ui-bottom.xml ] || return 1
+  grep -q "package=\"$PKG\"" e2e-ui-bottom.xml || return 1
+  grep -Eq "12 •" e2e-ui-bottom.xml || return 1
+  grep -Eq "13 •" e2e-ui-bottom.xml || return 1
+}
+
+if ! scroll_to_bottom_and_dump; then
+  echo "UI bottom check retry: returning production activity to foreground."
+  adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
+  adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-restart-ui.txt 2>&1 || fail "Production UI foreground recovery failed"
+  sleep 8
+  PID_RETRY="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
+  [ -n "$PID_RETRY" ] || fail "App process not alive during UI reachability retry"
+  scroll_to_bottom_and_dump || fail "Stage 12/13 controls not reachable in production UI"
+fi
 
 # Exercise the dependency gate: stage 2 must not silently pass before accessibility is enabled.
 adb shell input tap 300 0 >/dev/null 2>&1 || true
