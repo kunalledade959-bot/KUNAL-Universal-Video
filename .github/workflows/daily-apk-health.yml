@@ -108,3 +108,13 @@ jobs:
           else
             gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
           fi
+
+      - name: Escalate health failure to runtime diagnosis
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          echo 'Daily health failed. Starting a fresh Runtime Crash Diagnostic on main.'
+          gh workflow run runtime-diagnostic.yml --repo "$REPO" --ref main
