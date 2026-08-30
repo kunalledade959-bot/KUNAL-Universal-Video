@@ -1,0 +1,99 @@
+name: Locked Production Verification Gate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: kunal-locked-production-verification
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      REPO: ${{ github.repository }}
+
+    steps:
+      - name: Dispatch full production E2E and all 13 independent sequences
+        shell: bash
+        run: |
+          set -euo pipefail
+          CURRENT_SHA="$(gh api "repos/$REPO/commits/main" --jq .sha)"
+          START_EPOCH="$(date +%s)"
+          echo "VERIFY_SHA=$CURRENT_SHA" >> "$GITHUB_ENV"
+
+          gh workflow run full-e2e-emulator.yml --repo "$REPO" --ref main
+          for n in $(seq -w 1 13); do
+            gh workflow run "sequence-$n.yml" --repo "$REPO" --ref main &
+          done
+          wait
+
+          for i in {1..30}; do
+            FULL="$(gh run list --repo "$REPO" --workflow full-e2e-emulator.yml --branch main --limit 20 --json databaseId,headSha,status,createdAt | jq -r --arg sha "$CURRENT_SHA" --argjson start "$START_EPOCH" '[.[] | select(.headSha==$sha) | select((.createdAt | fromdateiso8601) >= $start)] | .[0].databaseId // empty')"
+            if [ -n "$FULL" ]; then
+              echo "FULL_E2E_RUN_ID=$FULL" >> "$GITHUB_ENV"
+              break
+            fi
+            sleep 5
+          done
+          test -n "${FULL:-}"
+
+      - name: Wait for full production E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run watch "$FULL_E2E_RUN_ID" --repo "$REPO" --exit-status
+
+      - name: Wait for all 13 independent sequence gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          : > locked-sequence-results.txt
+          failed=0
+          for n in $(seq -w 1 13); do
+            run_id=""
+            for attempt in {1..60}; do
+              JSON="$(gh run list --repo "$REPO" --workflow "sequence-$n.yml" --branch main --limit 20 --json databaseId,headSha,status,conclusion,createdAt)"
+              ROW="$(echo "$JSON" | jq -r --arg sha "$VERIFY_SHA" '[.[] | select(.headSha==$sha)] | .[0] // empty | [(.databaseId|tostring), .status, (.conclusion // "")] | @tsv')"
+              if [ -n "$ROW" ]; then
+                run_id="$(echo "$ROW" | cut -f1)"
+                status="$(echo "$ROW" | cut -f2)"
+                conclusion="$(echo "$ROW" | cut -f3)"
+                if [ "$status" = "completed" ]; then
+                  echo "Sequence $n: run=$run_id status=$status conclusion=$conclusion" | tee -a locked-sequence-results.txt
+                  [ "$conclusion" = "success" ] || failed=1
+                  break
+                fi
+              fi
+              sleep 5
+            done
+            if [ -z "$run_id" ]; then
+              echo "Sequence $n: no completed run found for SHA $VERIFY_SHA" | tee -a locked-sequence-results.txt
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more locked sequence gates failed."
+            exit 1
+          fi
+
+      - name: Publish unified verification evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: locked-production-verification
+          path: locked-sequence-results.txt
+          if-no-files-found: warn
+
+      - name: Fail closed on verification failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "LOCKED PRODUCTION VERIFICATION FAILED."
+          echo "No APK replacement or sequence unlock is authorized by this workflow."
+          exit 1
