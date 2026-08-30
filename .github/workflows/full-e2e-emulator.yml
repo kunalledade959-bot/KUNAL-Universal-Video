@@ -43,6 +43,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 preflight_patch.py
+          python3 mobile_connection_real_fix.py
           python3 pro_repair_v3.py
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
