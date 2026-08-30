@@ -1,0 +1,1 @@
+Temporary verification note: Daily APK Health Gate baseline verification requires GH_TOKEN for GitHub CLI authentication. Do not modify the golden APK, StageGate, or E2E test contracts.
