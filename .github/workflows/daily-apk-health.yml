@@ -111,15 +111,3 @@ jobs:
           else
             gh issue create --repo "$REPO" --title "$TITLE" --body "$BODY"
           fi
-
-      - name: Escalate health failure to Autonomous APK Doctor
-        if: failure()
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          echo 'Daily health failed. Starting Autonomous APK Doctor with the exact health-run evidence.'
-          gh workflow run autonomous-apk-doctor.yml --repo "$REPO" --ref main \
-            -f source_workflow='Daily APK Health Gate' \
-            -f source_run_id='${{ github.run_id }}'
