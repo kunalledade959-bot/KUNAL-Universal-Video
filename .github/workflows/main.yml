@@ -11,6 +11,7 @@ on:
       - "pro_repair_v3.py"
       - "preflight_patch.py"
       - ".github/scripts/emulator-smoke.sh"
+      - ".github/scripts/github_update_patch.py"
       - ".github/workflows/main.yml"
 
 permissions:
@@ -41,6 +42,9 @@ jobs:
       - name: Apply deterministic preflight patch
         shell: bash
         run: python3 preflight_patch.py
+      - name: Apply GitHub verified update channel
+        shell: bash
+        run: python3 .github/scripts/github_update_patch.py
       - name: Run autonomous repair and build
         shell: bash
         run: python3 pro_repair_v3.py
