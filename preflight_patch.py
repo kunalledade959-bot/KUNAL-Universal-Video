@@ -8,9 +8,6 @@ s=s.replace('for p in [Path(os.environ.get("GRADLE_BIN","/usr/local/bin/gradle")
 s=s.replace('if not(S and G and J and JC):return False,{"reason":"BUILD_ENVIRONMENT_MISSING","sdk":str(S) if S else None,"gradle":str(G) if G else None,"java":J,"javac":JC}', 'if not(S and G and J and JC):return False,{"reason":"BUILD_ENVIRONMENT_MISSING","sdk":str(S) if S else None,"gradle":str(G) if G else None,"java":J,"javac":JC}; log(f"[BUILD_ENV] sdk={S} gradle={G} java={J}")')
 s=s.replace('if static_ok:build_ok,bi=build()', 'if static_ok:build_ok,bi=build(); log("BUILD_RESULT="+json.dumps(bi,indent=2)); log("BUILD_ERRORS="+"\\n".join([x for x in BUILD_LOG.read_text(encoding="utf-8",errors="replace").splitlines() if re.search(r"(^e:|error:|Unresolved reference|Type mismatch|Cannot access|Overload resolution)",x,re.I)]) if BUILD_LOG.exists() else "BUILD_LOG_MISSING")')
 
-# Patch the production UI source before pro_repair_v3.py copies activity_fixed.kt into the build.
-# The previous layout gave the story editor weight=1, leaving the lower stage buttons outside
-# the viewport. Keep all 13 controls in a ScrollView so the real UI hierarchy exposes them.
 activity=Path('activity_fixed.kt')
 if activity.is_file():
     a=activity.read_text(encoding='utf-8')
@@ -24,11 +21,26 @@ if activity.is_file():
     if old_end not in a:
         raise SystemExit('UI FIX: actions layout target not found')
     a=a.replace(old_end,new_end,1)
+    # Stage 2 must not PASS merely because connect() was called. It now requires
+    # a real loopback controller handshake plus an enabled Accessibility service.
+    old_connect='UniversalAccessibilityService.targetPackage=target;bridge?.connect(target)\n        pass(2,"Accessibility enabled and local controller session connected")'
+    new_connect='UniversalAccessibilityService.targetPackage=target\n        val ok=bridge?.connect(target)==true\n        if(!ok){fail(2,"Real controller handshake failed; device is not connected") ;return}\n        if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service dropped during connection");return}\n        pass(2,"REAL DEVICE CONTROL CHANNEL VERIFIED: handshake + PING/PONG + Accessibility ready")'
+    if old_connect not in a:
+        raise SystemExit('REAL CONNECT FIX: target not found')
+    a=a.replace(old_connect,new_connect,1)
+    # Stage 6 must observe the target actually come to the foreground and expose
+    # a live accessibility tree before it can PASS.
+    old_operate='i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP);UniversalAccessibilityService.targetPackage=target;startActivity(i)\n        pass(6,"Target launched and Accessibility operation channel armed")'
+    new_operate='i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP);UniversalAccessibilityService.targetPackage=target;startActivity(i)\n        val deadline=System.currentTimeMillis()+5000\n        while(System.currentTimeMillis()<deadline && !UniversalAccessibilityService.targetForeground){Thread.sleep(150)}\n        val root=UniversalAccessibilityService.instance?.rootInActiveWindow\n        if(!UniversalAccessibilityService.targetForeground || root==null){root?.recycle();fail(6,"Target launch did not produce a live foreground accessibility channel");return}\n        var nodes=0\n        fun probe(n:AccessibilityNodeInfo?){if(n==null)return;nodes++;for(k in 0 until n.childCount)probe(n.getChild(k))}\n        probe(root);root.recycle()\n        if(nodes<1){fail(6,"Target foreground but accessibility tree is empty");return}\n        pass(6,"REAL TARGET OPERATION VERIFIED: foreground + live accessibility tree nodes=$nodes")'
+    if old_operate not in a:
+        raise SystemExit('REAL OPERATE FIX: target not found')
+    a=a.replace(old_operate,new_operate,1)
     activity.write_text(a,encoding='utf-8')
-    print('UI SCROLL FIX: PASS')
+    print('REAL RUNTIME STAGE FIX: PASS')
 else:
     raise SystemExit('UI FIX: activity_fixed.kt missing')
 
+# The Android project receives the locked activity/stage sources from these files.
 old='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE),("MainActivity.kt",ACTIVITY)]:write(java/n,d)'
 new='for n,d in [("ControllerProtocol.kt",PROTOCOL),("LocalBridgeService.kt",BRIDGE),("UniversalAccessibilityService.kt",ACCESS),("ScreenCaptureService.kt",CAPTURE)]:write(java/n,d)\n write(java/"MainActivity.kt",Path("activity_fixed.kt").read_text(encoding="utf-8"))\n write(java/"StageGate.kt",Path("stage_gate.kt").read_text(encoding="utf-8"))'
 if old not in s: raise SystemExit('ACTIVITY overlay target line not found')
@@ -37,5 +49,22 @@ old2='android=STAGE/"android-controller";write(android/"local.properties","sdk.d
 new2='android=STAGE/"android-controller"\n for stale in [android/"app/src/main/java/com/kunal/universalvideo/ControllerBridgeForegroundService.kt",android/"app/src/main/java/com/kunal/universalvideo/SelfRepairManager.kt"]:\n  try: stale.unlink()\n  except FileNotFoundError: pass\n write(android/"local.properties","sdk.dir="+str(S).replace("\\\\","/"));env=os.environ.copy()'
 if old2 not in s: raise SystemExit('BUILD cleanup target line not found')
 s=s.replace(old2,new2,1)
+
+# Harden the generated LocalBridgeService itself. The old implementation only
+# flipped an AtomicBoolean, which made "connected" a UI claim rather than evidence.
+old_bridge='fun connect(t:String){target=t;UniversalAccessibilityService.targetPackage=t;connected.set(true);cb("REAL LOCAL SESSION CONNECTED")} '
+new_bridge='''fun connect(t:String):Boolean{\n  if(t.isBlank()||!running.get())return false\n  target=t;UniversalAccessibilityService.targetPackage=t\n  repeat(20){\n    try{\n      val u=java.net.URL("http://127.0.0.1:$PORT/health")\n      val c=(u.openConnection() as java.net.HttpURLConnection).apply{connectTimeout=250;readTimeout=500;requestMethod="GET"}\n      val body=c.inputStream.bufferedReader().use{it.readText()};c.disconnect()\n      val j=JSONObject(body)\n      if(j.optBoolean("ok") && j.optString("protocol")==ControllerProtocol.PROTOCOL){\n        val p=java.net.URL("http://127.0.0.1:$PORT/status")\n        val pc=(p.openConnection() as java.net.HttpURLConnection).apply{connectTimeout=250;readTimeout=500;requestMethod="GET"}\n        val pb=pc.inputStream.bufferedReader().use{it.readText()};pc.disconnect()\n        val sj=JSONObject(pb)\n        if(sj.optBoolean("ok") && sj.optString("session_id")==sessionId){\n          connected.set(true);cb("REAL DEVICE CONTROL CHANNEL CONNECTED");return true\n        }\n      }\n    }catch(_:Exception){}\n    try{Thread.sleep(100)}catch(_:InterruptedException){Thread.currentThread().interrupt();return false}\n  }\n  connected.set(false);cb("Controller handshake failed");return false\n} '''
+if old_bridge not in s:
+    raise SystemExit('REAL BRIDGE FIX: bridge connect target not found')
+s=s.replace(old_bridge,new_bridge,1)
+
+# Keep the embedded legacy ACTIVITY string aligned with the checked-in activity source
+# for static/repair tooling that still scans it.
+old_emb_connect='UniversalAccessibilityService.targetPackage=target;bridge?.connect(target)\n        pass(2,"Accessibility enabled and local controller session connected")'
+new_emb_connect=new_connect
+if old_emb_connect in s:s=s.replace(old_emb_connect,new_emb_connect,1)
+old_emb_operate='i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP);UniversalAccessibilityService.targetPackage=target;startActivity(i)\n        pass(6,"Target launched and Accessibility operation channel armed")'
+if old_emb_operate in s:s=s.replace(old_emb_operate,new_operate,1)
+
 p.write_text(s,encoding='utf-8')
 print('PRE-FLIGHT PATCH: PASS')
