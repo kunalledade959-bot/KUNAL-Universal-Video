@@ -12,7 +12,7 @@ on:
       - ".github/workflows/main.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -90,3 +90,29 @@ jobs:
             emulator-logcat.txt
             emulator-restart-logcat.txt
           if-no-files-found: ignore
+
+  publish-verified-release:
+    needs: emulator-smoke-test
+    if: needs.emulator-smoke-test.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download verified APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-APK
+          path: release
+      - name: Publish immutable verified APK release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="verified-apk-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" \
+            release/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
+            release/KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
+            release/APK_SHA256.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Verified APK ${GITHUB_RUN_NUMBER}" \
+            --notes "Production APK verified by build + Android emulator smoke test. Commit: ${GITHUB_SHA}. The APK SHA-256 is stored in APK_SHA256.txt."
