@@ -13,8 +13,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
-      # Give the headless emulator a little more time to exit cleanly so an
-      # ADB/emu-kill race cannot turn a completed E2E gate into a CI failure.
       ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "30"
     steps:
       - name: Checkout
@@ -58,16 +56,10 @@ jobs:
           api-level: 35
           arch: x86_64
           profile: pixel_2
-          # Explicit software rendering + no snapshot save avoids the two
-          # hosted-runner paths that have produced flaky emulator/ADB state.
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot-save -no-audio -no-boot-anim -no-metrics -camera-back none
+          cores: 4
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -no-metrics -camera-back none -memory 3072
           disable-animations: true
           emulator-boot-timeout: 900
-          pre-emulator-launch-script: |
-            set -euo pipefail
-            adb kill-server >/dev/null 2>&1 || true
-            adb start-server >/dev/null
-            adb version
           script: bash .github/scripts/full-e2e-emulator.sh
 
       - name: Upload E2E evidence
