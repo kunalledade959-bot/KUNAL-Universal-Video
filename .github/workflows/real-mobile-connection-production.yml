@@ -55,6 +55,9 @@ jobs:
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           sha256sum KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk | tee APK_SHA256.txt
+          rm -rf artifact
+          mkdir -p artifact
+          cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/
       - name: Upload APK evidence
         uses: actions/upload-artifact@v4
         with:
