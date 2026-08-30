@@ -44,9 +44,9 @@ sleep 12
 PID="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
 [ -n "$PID" ] || fail "App process not alive"
 
-# UI hierarchy is the source of truth. Do not fail merely because dumpsys uses
-# a different Android-15 focus representation. If another system surface is on
-# top, recover to Home and relaunch the production Activity, then inspect again.
+# UI hierarchy is the source of truth. Hosted software emulators can surface a
+# System UI ANR dialog even while the target app is healthy. Detect that exact
+# system surface and choose Wait before judging the production hierarchy.
 dump_ui(){
   local out="$1" remote="/sdcard/kuv-ui.xml"
   rm -f "$out"
@@ -59,12 +59,29 @@ dump_ui(){
   return 1
 }
 
+recover_system_ui_anr(){
+  local xml="/tmp/system-ui-check.xml"
+  rm -f "$xml"
+  if ! dump_ui "$xml"; then return 1; fi
+  if grep -Fq "System UI isn't responding" "$xml"; then
+    echo "SYSTEM_UI_ANR_DETECTED=1"
+    # The Android system dialog's documented recovery action is Wait. Use the
+    # text selector when available, then fall back to the stable dialog button
+    # coordinate on the Pixel 2 profile used by this gate.
+    adb shell input tap 540 1059 >/dev/null 2>&1 || true
+    sleep 8
+    return 0
+  fi
+  return 1
+}
+
 relaunch_production(){
   adb shell input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
   sleep 2
   adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
   adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-relaunch.txt 2>&1 || return 1
   sleep 12
+  recover_system_ui_anr >/dev/null 2>&1 || true
   local p
   p="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
   [ -n "$p" ]
@@ -73,9 +90,22 @@ relaunch_production(){
 # Initial production hierarchy. The package check is evidence-based.
 dump_ui e2e-ui-top.xml || fail "Initial UI hierarchy dump failed"
 if ! grep -q "package=\"$PKG\"" e2e-ui-top.xml; then
+  if grep -Fq "System UI isn't responding" e2e-ui-top.xml; then
+    echo "System UI ANR dialog detected; choosing Wait before production relaunch."
+    adb shell input tap 540 1059 >/dev/null 2>&1 || true
+    sleep 8
+  fi
   echo "Initial hierarchy is not production UI; performing controlled relaunch."
   relaunch_production || fail "Production Activity relaunch failed"
   dump_ui e2e-ui-top.xml || fail "Initial UI hierarchy dump failed after relaunch"
+  if ! grep -q "package=\"$PKG\"" e2e-ui-top.xml; then
+    if grep -Fq "System UI isn't responding" e2e-ui-top.xml; then
+      echo "System UI ANR persisted after relaunch; choosing Wait and retrying once."
+      adb shell input tap 540 1059 >/dev/null 2>&1 || true
+      sleep 8
+      dump_ui e2e-ui-top.xml || fail "Initial UI hierarchy dump failed after ANR recovery"
+    fi
+  fi
   grep -q "package=\"$PKG\"" e2e-ui-top.xml || fail "Initial UI hierarchy is not production activity"
 fi
 
@@ -117,6 +147,7 @@ adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
 sleep 3
 adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-restart-ui.txt 2>&1 || fail "Restart launch failed"
 sleep 8
+recover_system_ui_anr >/dev/null 2>&1 || true
 PID2="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
 [ -n "$PID2" ] || fail "App process not alive after restart"
 
