@@ -17,6 +17,7 @@ pass(){ log "PASS|$1|$2|$3"; }
 log "KUNAL UNIVERSAL VIDEO - EXHAUSTIVE SEQUENCE FAULT MATRIX"
 log "MODE=STATIC_FAILURE_PATH_COVERAGE"
 log "RULE=Every discovered failure path must be explicit, user-visible, and fail-closed."
+log "SOURCE_STATE=POST_PRODUCTION_SAFETY_REPAIR"
 log ""
 
 # Each stage is checked for the expected success path plus the important classes
@@ -43,35 +44,27 @@ done
 
 log ""
 log "--- HIGH-RISK FAILURE CLASSES ---"
-# Startup/lifecycle
 for p in "onCreate(b:Bundle?)" "stage1()" "buildUi(p)" "renderStatus()"; do
   grep -Fq "$p" "$SRC" && pass 1 "Startup" "present:$p" || fail 1 "Startup" "missing:$p"
 done
-# Connection/permissions
 for p in "isEnabled" "openAccessibility()" "bridge?.connect(target)" "handshake + PING/PONG"; do
   grep -Fq "$p" "$SRC" && pass 2 "Connection" "guard:$p" || fail 2 "Connection" "missing:$p"
 done
-# Target/package failures
 for p in "getInstalledApplications" "getApplicationInfo(target,0)" "getLaunchIntentForPackage(target)" "No target selected"; do
   grep -Fq "$p" "$SRC" && pass 3 "Target" "guard:$p" || fail 3 "Target" "missing:$p"
 done
-# Accessibility/target UI failures
 for p in "targetForeground" "rootInActiveWindow" "AccessibilityNodeInfo" "nodes<1"; do
   grep -Fq "$p" "$SRC" && pass 6 "Target UI" "guard:$p" || fail 6 "Target UI" "missing:$p"
 done
-# Input/data persistence failures
 for p in "s.length<10" "Story missing" "putString(STORY,s)" "putString(SCENES,scenes)" "putString(PLAN,plan)"; do
   grep -Fq "$p" "$SRC" && pass 5 "Data" "guard:$p" || fail 5 "Data" "missing:$p"
 done
-# Audio/recording failures
 for p in "synthesizeToFile" "result!=TextToSpeech.SUCCESS" "MediaProjectionManager" "Recording stopped but no real MediaStore video was produced"; do
   grep -Fq "$p" "$SRC" && pass 10 "Media Capture" "guard:$p" || fail 10 "Media Capture" "missing:$p"
 done
-# Assembly/media failures
 for p in "MediaExtractor" "MediaMuxer" "trackCount" "required media track missing" "video FD unavailable"; do
   grep -Fq "$p" "$SRC" && pass 11 "Assembly" "guard:$p" || fail 11 "Assembly" "missing:$p"
 done
-# Final export/storage failures
 for p in "IS_PENDING" "openOutputStream" "EXTERNAL_CONTENT_URI" "FINAL"; do
   grep -Fq "$p" "$SRC" && pass 13 "Export" "guard:$p" || fail 13 "Export" "missing:$p"
 done
@@ -80,7 +73,7 @@ log ""
 log "--- CRASH/PLACEHOLDER SCAN ---"
 if grep -Eiq 'TODO|FIXME|NotImplemented|UnsupportedOperationException' "$SRC"; then fail 0 "Code hygiene" "placeholder/unimplemented marker found"; else pass 0 "Code hygiene" "no placeholder/unimplemented marker"; fi
 if grep -Eiq '!!' "$SRC"; then fail 0 "Null safety" "Kotlin !! operator found in production controller"; else pass 0 "Null safety" "no Kotlin !! operator"; fi
-if grep -Eq 'catch\(e:Exception\)' "$SRC"; then pass 0 "Exception handling" "media/TTS exceptions are caught"; else fail 0 "Exception handling" "no broad exception boundary found"; fi
+if grep -Eq 'catch\(e:Exception\)' "$SRC"; then pass 0 "Exception handling" "media/TTS/startup exceptions are caught"; else fail 0 "Exception handling" "no broad exception boundary found"; fi
 
 log ""
 log "--- STAGE GATE INVARIANTS ---"
