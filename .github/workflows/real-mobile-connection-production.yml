@@ -40,16 +40,22 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
       - name: Apply production preflight
+        shell: bash
         run: python3 preflight_patch.py
       - name: Apply real Accessibility connection patch
+        shell: bash
         run: python3 mobile_connection_real_fix.py
       - name: Apply Stage 2 binding hardening
+        shell: bash
         run: python3 mobile_connection_hardening_v2.py
       - name: Wire locked production Activity and StageGate into builder
+        shell: bash
         run: python3 mobile_connection_production_patch.py
       - name: Apply verified GitHub update channel
+        shell: bash
         run: python3 .github/scripts/github_update_patch.py
       - name: Build production APK
+        shell: bash
         run: python3 pro_repair_v3.py
       - name: Verify APK and report
         shell: bash
@@ -97,3 +103,5 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "Verified APK ${GITHUB_RUN_NUMBER}" \
             --notes "Production APK verified by build + Android emulator E2E. Real Mobile Connection requires AccessibilityService binding and controller health/status verification; physical-device verification remains separate."
+
+# Triggered after Stage-2 hardening compatibility fix. Do not remove the explicit bash shells.
