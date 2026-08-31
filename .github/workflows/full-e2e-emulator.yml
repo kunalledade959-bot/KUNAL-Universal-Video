@@ -93,7 +93,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 production_safety_patch.py
           python3 preflight_patch.py
           python3 mobile_connection_real_fix.py
           python3 pro_repair_v3.py
