@@ -5,10 +5,12 @@ on:
   push:
     paths:
       - "activity_fixed.kt"
+      - "stage_gate.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
       - "mobile_connection_real_fix.py"
       - "mobile_connection_hardening_v2.py"
+      - "mobile_connection_production_patch.py"
       - ".github/scripts/github_update_patch.py"
       - ".github/workflows/real-mobile-connection-production.yml"
 
@@ -43,6 +45,8 @@ jobs:
         run: python3 mobile_connection_real_fix.py
       - name: Apply Stage 2 binding hardening
         run: python3 mobile_connection_hardening_v2.py
+      - name: Wire locked production Activity and StageGate into builder
+        run: python3 mobile_connection_production_patch.py
       - name: Apply verified GitHub update channel
         run: python3 .github/scripts/github_update_patch.py
       - name: Build production APK
