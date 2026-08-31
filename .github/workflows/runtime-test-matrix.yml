@@ -1,0 +1,42 @@
+name: Runtime Test Matrix Contract
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '13_STAGE_RUNTIME_TEST_MATRIX.md'
+      - 'SEQUENCE_13_STAGE_PROBLEM_CATALOG.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate every stage and unique test IDs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s 13_STAGE_RUNTIME_TEST_MATRIX.md
+          test -s SEQUENCE_13_STAGE_PROBLEM_CATALOG.md
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          p=Path('13_STAGE_RUNTIME_TEST_MATRIX.md').read_text(encoding='utf-8')
+          c=Path('SEQUENCE_13_STAGE_PROBLEM_CATALOG.md').read_text(encoding='utf-8')
+          for i in range(1,14):
+              assert f'## Stage {i} —' in p, f'matrix missing stage {i}'
+              assert f'## Stage {i} —' in c, f'catalog missing stage {i}'
+          ids=re.findall(r'^\| ((?:S\d{2}-P\d{2})|(?:X-P\d{2})) \|', p, re.M)
+          assert ids, 'no test IDs found'
+          assert len(ids)==len(set(ids)), 'duplicate test ID found'
+          assert len(ids) >= 130, f'expected broad matrix, found only {len(ids)} IDs'
+          for sid in ids:
+              assert f'| {sid} |' in p
+          assert 'STATIC PASS' in p and 'EMULATOR PASS' in p and 'REAL DEVICE PASS' in p
+          print(f'MATRIX_CONTRACT_PASS ids={len(ids)}')
+          PY
