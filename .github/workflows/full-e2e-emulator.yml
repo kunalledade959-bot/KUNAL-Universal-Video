@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   ANDROID_EMULATOR_WAIT_TIME_BEFORE_KILL: "30"
@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Apply deterministic production safety repair
         shell: bash
@@ -28,6 +30,21 @@ jobs:
           grep -q 'Startup self-diagnostic failed' activity_fixed.kt
           grep -q 'Gallery output stream unavailable' activity_fixed.kt
           ! grep -q 'os!!' activity_fixed.kt
+
+      - name: Persist safety repair to main when source is still vulnerable
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- activity_fixed.kt; then
+            echo 'SAFETY_REPAIR_ALREADY_PERSISTED=1'
+            exit 0
+          fi
+          git config user.name 'kunalledade959-bot'
+          git config user.email 'kunalledade959@gmail.com'
+          git add activity_fixed.kt
+          git commit -m 'fix: persist production safety hardening'
+          git push origin HEAD:main
+          echo 'SAFETY_REPAIR_PERSISTED=1'
 
       - name: Run exhaustive 13-stage fault matrix before runtime testing
         shell: bash
