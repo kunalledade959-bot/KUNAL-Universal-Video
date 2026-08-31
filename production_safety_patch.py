@@ -27,15 +27,24 @@ new_stage1 = '''    private fun stage1(){
         }
     }'''
 
-if old_stage1 not in s:
-    raise SystemExit("stage1 repair anchor not found")
-s = s.replace(old_stage1, new_stage1, 1)
-
 old_stream = 'contentResolver.openOutputStream(uri).use{os->FileInputStream(src).use{input->input.copyTo(os!!)}}'
 new_stream = 'contentResolver.openOutputStream(uri).use{os->if(os==null)throw IllegalStateException("Gallery output stream unavailable");FileInputStream(src).use{input->input.copyTo(os)}}'
-if old_stream not in s:
-    raise SystemExit("gallery output stream repair anchor not found")
-s = s.replace(old_stream, new_stream, 1)
 
-p.write_text(s, encoding="utf-8")
-print("PRODUCTION_SAFETY_PATCH=PASS")
+changed = False
+if old_stage1 in s:
+    s = s.replace(old_stage1, new_stage1, 1)
+    changed = True
+elif new_stage1 not in s:
+    raise SystemExit("stage1 repair anchor not found and repaired form is absent")
+
+if old_stream in s:
+    s = s.replace(old_stream, new_stream, 1)
+    changed = True
+elif new_stream not in s:
+    raise SystemExit("gallery output stream repair anchor not found and repaired form is absent")
+
+if changed:
+    p.write_text(s, encoding="utf-8")
+    print("PRODUCTION_SAFETY_PATCH=PASS_APPLIED")
+else:
+    print("PRODUCTION_SAFETY_PATCH=PASS_ALREADY_APPLIED")
