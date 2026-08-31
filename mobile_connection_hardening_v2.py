@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic Stage-2 hardening. No fake connection state.
-
-This patch intentionally works against the generated embedded LocalBridgeService
-rather than relying on one historical formatting of pro_repair_v3.py.
-"""
+"""Deterministic Stage-2 hardening. No fake connection state."""
 from pathlib import Path
 import re
 
@@ -42,8 +38,7 @@ a = a.replace("/** Production 1..13 workflow controller.", "/** MOBILE_HARDEN_V2
 activity.write_text(a, encoding="utf-8")
 
 s = repair.read_text(encoding="utf-8")
-# Match the generated bridge by function signature and the following function,
-# independent of whitespace/one-line formatting used by the generator.
+# Locate connect() by signature and preserve the following disconnect() function.
 bridge_pat = re.compile(r"(?ms)(^\s*fun\s+connect\s*\(\s*t\s*:\s*String\s*\)\s*(?::\s*Boolean)?\s*\{).*?(^\s*fun\s+disconnect\s*\()")
 bridge_new = ''' fun connect(t:String):Boolean{
   if(!UniversalAccessibilityService.isEnabled || UniversalAccessibilityService.instance==null){connected.set(false);cb("REAL CONNECT FAIL • AccessibilityService not actually bound");return false}
@@ -55,17 +50,16 @@ bridge_new = ''' fun connect(t:String):Boolean{
    val p=(java.net.URL("http://127.0.0.1:$PORT/status").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="GET"}
    val pb=p.inputStream.bufferedReader().use{it.readText()};p.disconnect();val pj=JSONObject(pb)
    if(!pj.optBoolean("ok")||!pj.optBoolean("accessibility")||!pj.optBoolean("service_bound")){connected.set(false);return false}
-   val s=(java.net.URL("http://127.0.0.1:$PORT").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="GET"}
-   s.disconnect()
+   val ping=(java.net.URL("http://127.0.0.1:$PORT").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="GET"}
+   ping.disconnect()
    connected.set(true);cb("REAL DEVICE CONTROL CHANNEL CONNECTED");true
   }catch(_:Exception){connected.set(false);cb("REAL CONNECT FAIL • controller health/status verification failed");false}
  }
 '''
-s2, n = bridge_pat.subn(bridge_new + r'\1', s, count=1)
+s2, n = bridge_pat.subn(bridge_new + r'\2', s, count=1)
 if n != 1:
     raise SystemExit("MOBILE_HARDEN_V2: embedded bridge connect() block not found")
 s = s2
-# Add service-bound evidence to the bridge status response, only if absent.
 if '"service_bound" to (UniversalAccessibilityService.instance!=null)' not in s:
     s = s.replace('"accessibility" to UniversalAccessibilityService.isEnabled,"target_foreground"', '"accessibility" to UniversalAccessibilityService.isEnabled,"service_bound" to (UniversalAccessibilityService.instance!=null),"target_foreground"', 1)
 repair.write_text(s, encoding="utf-8")
