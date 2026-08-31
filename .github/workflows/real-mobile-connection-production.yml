@@ -104,4 +104,4 @@ jobs:
             --title "Verified APK ${GITHUB_RUN_NUMBER}" \
             --notes "Production APK verified by build + Android emulator E2E. Real Mobile Connection requires AccessibilityService binding and controller health/status verification; physical-device verification remains separate."
 
-# Triggered after Stage-2 hardening compatibility fix. Do not remove the explicit bash shells.
+# Deterministic reconstruction fix: production wiring is now function-boundary based, not brittle text matching.
