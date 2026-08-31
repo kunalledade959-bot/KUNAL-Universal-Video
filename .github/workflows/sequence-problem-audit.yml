@@ -1,0 +1,77 @@
+name: 13-Stage Problem Audit
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate source-backed audit report
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s activity_fixed.kt
+          test -s SEQUENCE_13_STAGE_PROBLEM_CATALOG.md
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('activity_fixed.kt').read_text(encoding='utf-8')
+          cat = Path('SEQUENCE_13_STAGE_PROBLEM_CATALOG.md').read_text(encoding='utf-8')
+          stages = [
+            'START / DIAGNOSTIC','ENABLE ACCESSIBILITY / CONNECT','SELECT / SAVE TARGET',
+            'STUDY SELECTED APK','SAVE STORY INPUT','OPERATE SELECTED TARGET',
+            'DEEP TARGET UNDERSTANDING','CREATE EXACT SCENE PLAN','BUILD PRODUCTION PLAN / PROMPTS',
+            'AUDIO / VOICE / MUSIC / SFX + RECORD','ASSEMBLE / EDIT','VERIFY / AUTO-FIX','FINAL GALLERY EXPORT'
+          ]
+          for i, name in enumerate(stages, 1):
+              assert f'## Stage {i} —' in cat, f'Stage {i} missing from catalog'
+          required = {
+            1: ['private fun stage1(', 'PackageManager returned no installed target applications', 'Startup self-diagnostic failed'],
+            2: ['private fun connectMobile(', 'Accessibility service is not enabled', 'Real controller handshake failed'],
+            3: ['private fun selectTarget(', 'No target selected', 'Target package selected'],
+            4: ['private fun studyTarget(', 'Target package not installed', 'Target has no launch activity'],
+            5: ['private fun saveStory(', 'Story must contain at least 10 characters', 'Story persisted'],
+            6: ['private fun operateTarget(', 'Target launch did not produce a live foreground accessibility channel', 'Target foreground but accessibility tree is empty'],
+            7: ['private fun deepStudy(', 'Target accessibility tree unavailable; target must be foreground', 'No accessibility nodes discovered'],
+            8: ['private fun scenePlan(', 'Story missing', 'Ordered scene plan created'],
+            9: ['private fun buildPlan(', 'Scene plan missing', 'Production prompts generated'],
+            10: ['private fun audioAndRecord(', 'TTS synthesis did not produce usable audio', 'Recording stopped but no real MediaStore video was produced'],
+            11: ['private fun assembleEdit(', 'No recorded visual clip found', 'required media track missing'],
+            12: ['private fun verifyAndFix(', 'Gallery output stream unavailable', 'FINAL'],
+            13: ['private fun finalExport(', 'Stage 12 must PASS', 'FINAL']
+          }
+          report = ['# Source-backed 13-stage audit', '', 'This report checks that each stage has an implementation and explicit failure evidence. It does not replace physical-device execution.', '']
+          total = passed = 0
+          for i, checks in required.items():
+              ok = []
+              for c in checks:
+                  total += 1
+                  hit = c in src
+                  ok.append((c, hit))
+                  if hit: passed += 1
+              report.append(f'## Stage {i}')
+              for c, hit in ok:
+                  report.append(f"- {'PASS' if hit else 'FAIL'}: {c}")
+              report.append('')
+          report += [f'CHECKS={passed}/{total}', f'RESULT={"PASS" if passed == total else "FAIL"}', '', 'DEVICE_ONLY_GAP=Physical phone behavior remains unverified by this static audit.']
+          Path('sequence-problem-audit-report.md').write_text('\n'.join(report)+'\n', encoding='utf-8')
+          if passed != total:
+              raise SystemExit('Source-backed audit failed')
+          PY
+
+      - name: Upload audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sequence-problem-audit-report
+          path: sequence-problem-audit-report.md
+          if-no-files-found: error
