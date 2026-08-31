@@ -1,0 +1,35 @@
+name: 13-Stage Adversarial Audit
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'activity_fixed.kt'
+      - '.github/scripts/13-stage-adversarial-audit.py'
+      - '.github/workflows/13-stage-adversarial-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run adversarial 13-stage audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/13-stage-adversarial-audit.py
+
+      - name: Upload complete audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 13-stage-adversarial-audit
+          path: 13-stage-adversarial-audit.json
+          if-no-files-found: error
