@@ -1,0 +1,45 @@
+name: Apply Production Safety Repair
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'activity_fixed.kt'
+      - 'production_safety_patch.py'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Apply deterministic repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 production_safety_patch.py
+          grep -q 'Startup self-diagnostic failed' activity_fixed.kt
+          grep -q 'Gallery output stream unavailable' activity_fixed.kt
+          ! grep -q 'os!!' activity_fixed.kt
+
+      - name: Persist repair to main
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- activity_fixed.kt; then
+            echo 'REPAIR_ALREADY_PERSISTED=1'
+            exit 0
+          fi
+          git config user.name 'kunalledade959-bot'
+          git config user.email 'kunalledade959@gmail.com'
+          git add activity_fixed.kt
+          git commit -m 'fix: persist production safety hardening'
+          git push origin HEAD:main
