@@ -1,0 +1,42 @@
+name: 13-Stage Exhaustive Fault Matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'activity_fixed.kt'
+      - 'stage_gate.kt'
+      - '.github/scripts/sequence-fault-matrix.sh'
+
+permissions:
+  contents: read
+
+jobs:
+  fault-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run exhaustive static failure-path matrix
+        shell: bash
+        run: |
+          set -o pipefail
+          bash .github/scripts/sequence-fault-matrix.sh
+
+      - name: Upload fault matrix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sequence-fault-matrix-evidence
+          path: sequence-fault-matrix.txt
+          if-no-files-found: error
+
+      - name: Fail closed on any uncovered fault path
+        if: failure()
+        shell: bash
+        run: |
+          echo 'FAULT MATRIX FAILED: repair uncovered paths before second-pass verification.'
+          exit 1
