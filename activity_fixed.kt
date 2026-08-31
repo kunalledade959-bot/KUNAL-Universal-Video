@@ -82,8 +82,23 @@ class MainActivity : androidx.activity.ComponentActivity() {
     private fun prefs()=getSharedPreferences(PREFS,MODE_PRIVATE)
 
     private fun stage1(){
-        if(gate.state(1)!=StageGate.State.PASS){gate.resetForRepair(1);gate.begin(1);gate.pass(1,"MainActivity launched; workflow controller attached")}
-        loadApps();renderStatus()
+        try {
+            if(gate.state(1)!=StageGate.State.PASS){
+                if(!gate.resetForRepair(1) || !gate.begin(1)){
+                    fail(1,"Startup StageGate could not enter RUNNING state");return
+                }
+            }
+            loadApps()
+            if(apps.isEmpty()){
+                fail(1,"PackageManager returned no installed target applications");return
+            }
+            if(gate.state(1)==StageGate.State.RUNNING){
+                pass(1,"MainActivity launched; workflow controller attached; installed-app discovery verified")
+            }
+            renderStatus()
+        }catch(e:Exception){
+            fail(1,"Startup self-diagnostic failed: ${e.javaClass.simpleName}: ${e.message}")
+        }
     }
     private fun renderStatus(){
         if(!::gate.isInitialized)return
@@ -222,7 +237,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
         try{
             val name="KunalUniversalVideo_${System.currentTimeMillis()}.mp4";val v=ContentValues().apply{put(MediaStore.Video.Media.DISPLAY_NAME,name);put(MediaStore.Video.Media.MIME_TYPE,"video/mp4");if(android.os.Build.VERSION.SDK_INT>=29){put(MediaStore.Video.Media.RELATIVE_PATH,"Movies/KunalUniversalVideo");put(MediaStore.Video.Media.IS_PENDING,1)}}
             val uri=contentResolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI,v)?:throw IllegalStateException("Gallery insert failed")
-            contentResolver.openOutputStream(uri).use{os->FileInputStream(src).use{input->input.copyTo(os!!)}}
+            contentResolver.openOutputStream(uri).use{os->if(os==null)throw IllegalStateException("Gallery output stream unavailable");FileInputStream(src).use{input->input.copyTo(os)}}
             if(android.os.Build.VERSION.SDK_INT>=29)contentResolver.update(uri,ContentValues().apply{put(MediaStore.Video.Media.IS_PENDING,0)},null,null)
             prefs().edit().putString("$FINAL",uri.toString()).apply();pass(13,"Final MP4 exported to Gallery/Movies/KunalUniversalVideo")
         }catch(e:Exception){fail(13,"Gallery export failed: ${e.javaClass.simpleName}: ${e.message}")}
