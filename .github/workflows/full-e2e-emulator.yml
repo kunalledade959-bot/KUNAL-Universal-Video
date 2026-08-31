@@ -20,6 +20,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Apply deterministic production safety repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 production_safety_patch.py
+          grep -q 'Startup self-diagnostic failed' activity_fixed.kt
+          grep -q 'Gallery output stream unavailable' activity_fixed.kt
+          ! grep -q 'os!!' activity_fixed.kt
+
       - name: Run exhaustive 13-stage fault matrix before runtime testing
         shell: bash
         run: |
@@ -67,6 +76,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python3 production_safety_patch.py
           python3 preflight_patch.py
           python3 mobile_connection_real_fix.py
           python3 pro_repair_v3.py
