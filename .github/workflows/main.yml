@@ -9,6 +9,7 @@ on:
       - "*.zip"
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
+      - "mobile_connection_real_fix.py"
       - "preflight_patch.py"
       - ".github/scripts/emulator-smoke.sh"
       - ".github/scripts/github_update_patch.py"
@@ -45,6 +46,12 @@ jobs:
       - name: Apply GitHub verified update channel
         shell: bash
         run: python3 .github/scripts/github_update_patch.py
+      - name: Apply proven real mobile connection patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 mobile_connection_real_fix.py
+          python3 -m py_compile pro_repair_v3.py
       - name: Run autonomous repair and build
         shell: bash
         run: python3 pro_repair_v3.py
@@ -115,6 +122,7 @@ jobs:
           set -euo pipefail
           TAG="verified-apk-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
+            release/KUNAL-Universal-Video_PRO_V3.apk \
             release/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
             release/KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
             release/APK_SHA256.txt \
