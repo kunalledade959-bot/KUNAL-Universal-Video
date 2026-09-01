@@ -10,6 +10,7 @@ on:
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
       - "mobile_connection_real_fix.py"
+      - "progressive_stage_ui_patch.py"
       - "preflight_patch.py"
       - ".github/scripts/emulator-smoke.sh"
       - ".github/scripts/github_update_patch.py"
@@ -52,6 +53,19 @@ jobs:
           set -euo pipefail
           python3 mobile_connection_real_fix.py
           python3 -m py_compile pro_repair_v3.py
+      - name: Apply progressive single-stage UI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 progressive_stage_ui_patch.py
+      - name: Verify progressive UI source
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'Only the current stage is available' activity_fixed.kt
+          grep -q 'stageButtons' activity_fixed.kt
+          grep -q 'targetSpinner.visibility=if(id==3)' activity_fixed.kt
+          grep -q 'story.visibility=if(id==5)' activity_fixed.kt
       - name: Run autonomous repair and build
         shell: bash
         run: python3 pro_repair_v3.py
