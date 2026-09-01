@@ -64,7 +64,7 @@ recover_anr(){
   local xml="$1"
   if ! anr_dialog "$xml"; then return 1; fi
   echo "ANR_DIALOG_DETECTED"
-  if grep -Fq 'Settings isn\x27t responding' "$xml"; then
+  if grep -Fq "Settings isn't responding" "$xml"; then
     echo "SETTINGS_ANR_DETECTED"
     # Close the wedged Settings process, then return to Home before relaunching production.
     adb shell input tap 540 933 >/dev/null 2>&1 || true
@@ -76,7 +76,7 @@ recover_anr(){
     sleep 4
     if dump_ui "$xml" && anr_dialog "$xml"; then
       echo "SYSTEM_ANR_PERSISTENT=1"
-      if grep -Fq 'System UI isn\x27t responding' "$xml"; then
+      if grep -Fq "System UI isn't responding" "$xml"; then
         adb shell am force-stop com.android.systemui >/dev/null 2>&1 || true
         sleep 6
       fi
