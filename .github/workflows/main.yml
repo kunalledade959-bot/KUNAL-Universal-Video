@@ -103,8 +103,27 @@ jobs:
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
           echo "no" | avdmanager create avd --force -n kunal-smoke --package "system-images;android-35;default;x86_64" --device "pixel_2"
-          AVD_DIR="${ANDROID_AVD_HOME:-$HOME/.android/avd}/kunal-smoke.avd"
+          AVD_BASE="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          AVD_DIR=""
+          if [[ -f "$AVD_BASE/kunal-smoke.avd/config.ini" ]]; then
+            AVD_DIR="$AVD_BASE/kunal-smoke.avd"
+          else
+            AVD_DIR="$(avdmanager list avd | awk -v name="kunal-smoke" '
+              $0 ~ "Name: " name {found=1; next}
+              found && /Path: / {sub(/^.*Path: /, ""); print; exit}
+            ')"
+          fi
+          if [[ -z "$AVD_DIR" || ! -f "$AVD_DIR/config.ini" ]]; then
+            echo "ERROR: Could not resolve created AVD directory"
+            echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-<unset>}"
+            echo "AVD_BASE=$AVD_BASE"
+            avdmanager list avd || true
+            find "$HOME" -maxdepth 5 -type f -name config.ini -path '*kunal-smoke.avd/*' -print || true
+            exit 1
+          fi
+          echo "Using AVD_DIR=$AVD_DIR"
           printf 'hw.cpu.ncore=4\nhw.ramSize=3072\nhw.gpu.enabled=yes\nhw.gpu.mode=swiftshader_indirect\n' >> "$AVD_DIR/config.ini"
+          echo "AVD_CONFIG=$AVD_DIR/config.ini" >> "$GITHUB_ENV"
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
