@@ -40,6 +40,39 @@ jobs:
         shell: bash
         run: python -m pip install --disable-pip-version-check pyyaml
 
+      - name: Materialize packaged Android project for inspection
+        id: materialize_android
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          if [[ -d android/app/src/main ]] && [[ -f android/app/src/main/AndroidManifest.xml ]]; then
+            echo 'ANDROID_SOURCE=repository-tree'
+            exit 0
+          fi
+          for archive in KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT.zip; do
+            if [[ -f "$archive" ]] && command -v unzip >/dev/null 2>&1; then
+              rm -rf .audit-android
+              mkdir -p .audit-android
+              unzip -q "$archive" -d .audit-android
+              manifest=$(find .audit-android -type f -name AndroidManifest.xml -path '*/app/src/main/*' | head -n 1)
+              if [[ -n "$manifest" ]]; then
+                appdir="${manifest%/src/main/AndroidManifest.xml}"
+                androidroot="${appdir%/app}"
+                rm -rf android
+                cp -a "$androidroot" android
+                echo "ANDROID_SOURCE=archive:$archive"
+                echo "ANDROID_MANIFEST=$manifest"
+                break
+              fi
+            fi
+          done
+          if [[ ! -f android/app/src/main/AndroidManifest.xml ]]; then
+            echo 'ANDROID_SOURCE=NOT_FOUND'
+          fi
+          exit 0
+
       - name: Collect complete A-to-Z evidence
         id: audit
         if: always()
@@ -50,12 +83,13 @@ jobs:
           if [[ -f .github/scripts/full-system-exhaustive-audit.sh ]]; then
             chmod +x .github/scripts/full-system-exhaustive-audit.sh
             .github/scripts/full-system-exhaustive-audit.sh
+            rc=$?
           else
             printf 'AUDIT_BOOTSTRAP_FAILURE: missing audit script\n' > FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
             printf 'AUDIT_BOOTSTRAP_FAILURE: missing audit script\n' > FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+            rc=2
           fi
-          rc=$?
-          printf '\nBOOTSTRAP_STATUS checkout=%s python=%s dependencies=%s audit_rc=%s\n' '${{ steps.checkout.outcome }}' '${{ steps.python.outcome }}' '${{ steps.deps.outcome }}' "$rc" >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
+          printf '\nBOOTSTRAP_STATUS checkout=%s python=%s dependencies=%s materialize_android=%s audit_rc=%s\n' '${{ steps.checkout.outcome }}' '${{ steps.python.outcome }}' '${{ steps.deps.outcome }}' '${{ steps.materialize_android.outcome }}' "$rc" >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
           exit 0
 
       - name: Guarantee reports
@@ -72,6 +106,7 @@ jobs:
             echo "checkout=${{ steps.checkout.outcome }}"
             echo "python=${{ steps.python.outcome }}"
             echo "dependencies=${{ steps.deps.outcome }}"
+            echo "materialize_android=${{ steps.materialize_android.outcome }}"
             echo "audit=${{ steps.audit.outcome }}"
             echo '===== END WORKFLOW STEP OUTCOMES ====='
           } >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
@@ -109,5 +144,5 @@ jobs:
           else
             echo 'FINAL VERDICT: PASS_STATIC_EXHAUSTIVE'
           fi
-          echo 'Collection completed. This step never aborts the evidence job.'
+          echo 'Collection completed. Evidence is authoritative; verdict does not abort the collector.'
           exit 0
