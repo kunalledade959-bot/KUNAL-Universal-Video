@@ -94,28 +94,37 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Install emulator test components
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+          echo "no" | avdmanager create avd --force -n kunal-smoke --package "system-images;android-35;default;x86_64" --device "pixel_2"
+          AVD_DIR="${ANDROID_AVD_HOME:-$HOME/.android/avd}/kunal-smoke.avd"
+          printf 'hw.cpu.ncore=4\nhw.ramSize=3072\nhw.gpu.enabled=yes\nhw.gpu.mode=swiftshader_indirect\n' >> "$AVD_DIR/config.ini"
       - name: Download APK artifact
         uses: actions/download-artifact@v4
         with:
           name: KUNAL-Universal-Video-APK
           path: artifact
-      - name: Android emulator smoke test
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
-          disable-animations: false
-          script: bash .github/scripts/emulator-smoke.sh
+      - name: Run deterministic emulator smoke test
+        shell: bash
+        env:
+          ANDROID_AVD_HOME: ${{ env.ANDROID_AVD_HOME }}
+        run: bash .github/scripts/emulator-smoke.sh
       - name: Upload emulator evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-emulator-evidence
           path: |
+            emulator.log
             emulator-logcat.txt
             emulator-restart-logcat.txt
+            adb-devices.txt
           if-no-files-found: ignore
 
   publish-verified-release:
