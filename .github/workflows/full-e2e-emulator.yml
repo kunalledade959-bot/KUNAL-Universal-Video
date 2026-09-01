@@ -112,19 +112,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -no-audio -no-boot-anim -no-metrics -camera-back none -memory 3072
           disable-animations: true
           emulator-boot-timeout: 900
-          shell: bash
-          script: |
-            set -euo pipefail
-            adb start-server
-            for i in $(seq 1 120); do
-              state=$(adb -s emulator-5554 get-state 2>/dev/null || true)
-              if [ "$state" = "device" ]; then
-                break
-              fi
-              sleep 2
-            done
-            test "$(adb -s emulator-5554 get-state)" = "device"
-            bash .github/scripts/full-e2e-emulator.sh
+          script: bash .github/scripts/run-emulator-e2e.sh
 
       - name: Upload E2E evidence
         if: always()
