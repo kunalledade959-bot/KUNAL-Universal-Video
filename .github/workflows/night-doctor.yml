@@ -4,6 +4,9 @@ on:
   schedule:
     - cron: '0 * * * *'
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/one-shot/night-doctor.trigger'
 
 concurrency:
   group: kunal-night-doctor
@@ -32,7 +35,6 @@ jobs:
           mkdir -p doctor-evidence
           cat > doctor-evidence/QUALITY_BASELINE.md <<'EOF'
           # KUNAL Universal Video - Top-Tier Engineering Baseline
-
           1. Prefer a layered testing strategy: unit/component tests are the high-volume base; feature/application/release-candidate tests provide increasing production fidelity.
           2. Real-device testing is mandatory before release. Emulators complement, not replace, hardware validation.
           3. Use instrumented/UI/E2E tests for Android framework behavior that JVM tests cannot prove.
@@ -84,28 +86,17 @@ jobs:
           set -euo pipefail
           copilot --autopilot --yolo --max-autopilot-continues 12 -p '
           You are the overnight senior Android architect and repair engineer for KUNAL Universal Video.
-
           GOAL: continuously improve the existing product toward production-grade quality without breaking working behavior. Work from evidence, never from guesses.
-
-          FIRST: read the entire repository relevant to the Android app, the 13-stage contracts, all audit reports in doctor-evidence, the current packaged Android project, and the authoritative QUALITY_BASELINE.md. Inspect every relevant small component, not only large files.
-
-          RESEARCH: use the downloaded official Android guidance in doctor-evidence/research as the baseline. When choosing among implementations, compare the strongest available options for correctness, Android compatibility, lifecycle safety, performance, security, maintenance, testability, and production maturity. Prefer official Android/Jetpack APIs where they are objectively strongest. Do not blindly replace a working implementation just because another library exists.
-
+          FIRST: read the entire repository relevant to the Android app, the 13-stage contracts, all audit reports in doctor-evidence, the current packaged Android project, and QUALITY_BASELINE.md. Inspect every relevant small component, not only large files.
+          RESEARCH: use the downloaded official Android guidance in doctor-evidence/research as the baseline. When choosing among implementations, compare the strongest available options for correctness, Android compatibility, lifecycle safety, performance, security, maintenance, testability, and production maturity. Prefer official Android/Jetpack APIs where objectively strongest. Do not blindly replace a working implementation just because another library exists.
           ROOT-CAUSE RULE: identify the first real defect. Distinguish app defects from CI/emulator/infrastructure limitations. Never hide a failure, skip a test, weaken an assertion, or manufacture PASS.
-
           REPAIR RULE: make only evidence-backed source/project repairs. Preserve package com.kunal.universalvideo, the 13-stage architecture, working features, and the real mobile/controller/video-generation intent. Do not replace the project with a toy implementation. Do not edit .github/workflows files. Do not modify secrets or credentials.
-
           MICRO-COMPONENT RULE: inspect constants, strings, APIs, permissions, dependencies, timeouts, retries, parsers, serializers, fallbacks, media codecs, lifecycle callbacks, error handling, persistence, and cleanup paths. If a component has alternatives, record why the selected one is stronger.
-
           VERIFICATION RULE: after every repair, run the narrowest relevant test first, then build, then emulator/runtime verification. For deterministic invariants, stress-test 10000 iterations where practical. Exercise boundary, empty, Unicode, malformed, timeout, cancellation, restart, process-death, and recovery cases where applicable.
-
-          FAIL-CONTINUE RULE: if one test fails, preserve the exact evidence and continue independent diagnostics. Do not stop the whole engineering pass just because one cell failed.
-
+          FAIL-CONTINUE RULE: if one test fails, preserve exact evidence and continue independent diagnostics. Do not stop the whole engineering pass just because one cell failed.
           RELEASE RULE: never publish a repaired APK or commit a project repair as verified unless the relevant build/runtime gate actually passes. A static PASS is not a device PASS. An emulator PASS is not a physical-device PASS.
-
           AUTO-COMMIT RULE: only commit project changes after the real available verification gates pass. Never commit a workflow change from this job. If no proven defect exists, make no speculative change.
-
-          At the end write doctor-evidence/DOCTOR_REPORT.md containing: exact findings, files inspected, alternatives considered, repairs made, tests executed, iteration counts, remaining blockers, and a strict verdict of VERIFIED / NOT_VERIFIED. 
+          At the end write doctor-evidence/DOCTOR_REPORT.md containing exact findings, files inspected, alternatives considered, repairs made, tests executed, iteration counts, remaining blockers, and a strict verdict of VERIFIED / NOT_VERIFIED.
           '
 
       - name: Rebuild and emulator gate
