@@ -24,16 +24,33 @@ adb_cmd() {
   timeout --signal=KILL "$ADB_TIMEOUT" "$ADB" "$@"
 }
 
-# The previous smoke test delegated emulator lifecycle to an action whose
-# post-boot ADB transport became unstable on the Linux runner. Own the full
-# lifecycle here so readiness, retries, evidence, and cleanup are deterministic.
 echo "Starting dedicated Android emulator smoke environment."
 
 adb_cmd start-server >/dev/null
 
 AVD_NAME="kunal-smoke"
 AVD_PATH="${ANDROID_AVD_HOME:-$HOME/.android/avd}/${AVD_NAME}.avd"
-[ -d "$AVD_PATH" ] || { echo "AVD_MISSING=$AVD_PATH"; exit 1; }
+if [ ! -d "$AVD_PATH" ]; then
+  RESOLVED_AVD_PATH="$(avdmanager list avd 2>/dev/null | awk -v name="$AVD_NAME" '
+    $0 ~ "Name: " name {found=1; next}
+    found && /Path: / {sub(/^.*Path: /, ""); print; exit}
+  ')"
+  if [ -n "$RESOLVED_AVD_PATH" ] && [ -d "$RESOLVED_AVD_PATH" ]; then
+    AVD_PATH="$RESOLVED_AVD_PATH"
+  fi
+fi
+[ -d "$AVD_PATH" ] || {
+  echo "AVD_MISSING=$AVD_PATH"
+  echo "ANDROID_AVD_HOME=${ANDROID_AVD_HOME:-<unset>}"
+  avdmanager list avd || true
+  exit 1
+}
+
+# Keep the emulator and avdmanager on the same discovered AVD home.
+AVD_HOME_DIR="$(dirname "$AVD_PATH")"
+export ANDROID_AVD_HOME="$AVD_HOME_DIR"
+echo "Using AVD_PATH=$AVD_PATH"
+echo "Using ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
 
 rm -f emulator.log emulator-logcat.txt emulator-restart-logcat.txt adb-devices.txt
 
