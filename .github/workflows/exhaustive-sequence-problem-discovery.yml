@@ -1,13 +1,8 @@
 name: Exhaustive 13-Stage Problem Discovery
 
+# Manual-only: problem discovery runs only when explicitly requested.
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - 'activity_fixed.kt'
-      - 'stage_gate.kt'
-      - 'tools/exhaustive_sequence_problem_discovery.py'
 
 permissions:
   contents: read
