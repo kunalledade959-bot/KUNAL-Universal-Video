@@ -1,0 +1,36 @@
+name: Mobile Connection Deep Diagnostic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile-connection-diagnostic-trigger.txt'
+      - '.github/scripts/mobile-connection-deep-diagnostic.sh'
+      - 'pro_repair_v3.py'
+      - 'mobile_connection_real_fix.py'
+      - 'activity_fixed.kt'
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run A-Z diagnostic
+        shell: bash
+        run: |
+          bash .github/scripts/mobile-connection-deep-diagnostic.sh
+
+      - name: Upload complete diagnostic report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-connection-deep-diagnostic-${{ github.run_id }}
+          path: mobile_connection_deep_diagnostic.txt
+          if-no-files-found: error
