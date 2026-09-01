@@ -21,23 +21,59 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout exact commit
+        id: checkout
+        continue-on-error: true
         uses: actions/checkout@v4
 
       - name: Set up Python for syntax checks
+        id: python
+        continue-on-error: true
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install audit parser dependencies
+        id: deps
+        continue-on-error: true
+        shell: bash
         run: python -m pip install --disable-pip-version-check pyyaml
 
       - name: Run complete non-blocking A-to-Z audit
         id: audit
+        if: always()
         continue-on-error: true
         shell: bash
         run: |
-          chmod +x .github/scripts/full-system-exhaustive-audit.sh
-          .github/scripts/full-system-exhaustive-audit.sh
+          set +e
+          if [[ -f .github/scripts/full-system-exhaustive-audit.sh ]]; then
+            chmod +x .github/scripts/full-system-exhaustive-audit.sh
+            .github/scripts/full-system-exhaustive-audit.sh
+            audit_rc=$?
+          else
+            : > FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
+            : > FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+            printf '[%s] AUDIT_BOOTSTRAP_FAILURE: audit script missing after checkout\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | tee -a FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+            audit_rc=2
+          fi
+          printf '\nBOOTSTRAP_STATUS checkout=%s python=%s dependencies=%s\n' '${{ steps.checkout.outcome }}' '${{ steps.python.outcome }}' '${{ steps.deps.outcome }}' >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
+          exit "$audit_rc"
+
+      - name: Guarantee complete final report exists
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          [[ -f FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt ]] || printf 'AUDIT REPORT WAS NOT CREATED BY AUDIT STEP\n' > FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
+          [[ -f FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt ]] || printf 'AUDIT ERROR FILE WAS NOT CREATED BY AUDIT STEP\n' > FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+          {
+            echo
+            echo '===== WORKFLOW STEP OUTCOMES ====='
+            echo "checkout=${{ steps.checkout.outcome }}"
+            echo "python=${{ steps.python.outcome }}"
+            echo "dependencies=${{ steps.deps.outcome }}"
+            echo "audit=${{ steps.audit.outcome }}"
+            echo '===== END WORKFLOW STEP OUTCOMES ====='
+          } >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
 
       - name: Print complete final report
         if: always()
@@ -59,7 +95,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Publish final verdict
+      - name: Publish final verdict only after collection
         if: always()
         shell: bash
         run: |
