@@ -1,0 +1,189 @@
+name: Night Doctor - Autonomous Quality Engineer
+
+on:
+  schedule:
+    - cron: '0 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-night-doctor
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+  copilot-requests: write
+
+jobs:
+  doctor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Checkout exact main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Record authoritative engineering baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p doctor-evidence
+          cat > doctor-evidence/QUALITY_BASELINE.md <<'EOF'
+          # KUNAL Universal Video - Top-Tier Engineering Baseline
+
+          1. Prefer a layered testing strategy: unit/component tests are the high-volume base; feature/application/release-candidate tests provide increasing production fidelity.
+          2. Real-device testing is mandatory before release. Emulators complement, not replace, hardware validation.
+          3. Use instrumented/UI/E2E tests for Android framework behavior that JVM tests cannot prove.
+          4. Use malformed-input/fuzz testing for security-sensitive and parser/media boundaries.
+          5. Use performance instrumentation/StrictMode and real-device benchmarks for performance claims.
+          6. Use screenshot/UI regression tests for critical visual surfaces where appropriate.
+          7. Never accept source-pattern presence as runtime proof.
+          8. Never turn warnings, skipped tests, unavailable dependencies, or infrastructure failures into PASS.
+          9. For every repair, preserve working behavior and prove the repaired behavior with the narrowest relevant test plus full regression.
+          10. Prefer official Android/Jetpack-supported mechanisms unless a stronger, verified alternative is demonstrated.
+          11. Before replacing a dependency/API, compare correctness, lifecycle behavior, compatibility, maintenance, performance, security, and testability.
+          12. A production claim requires evidence, not confidence.
+          EOF
+
+      - name: Research current Android quality guidance
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p doctor-evidence/research
+          curl -fsSL --max-time 20 https://developer.android.com/training/testing/fundamentals/strategies -o doctor-evidence/research/android-testing-strategies.html
+          curl -fsSL --max-time 20 https://developer.android.com/studio/run/device -o doctor-evidence/research/android-real-device.html
+          curl -fsSL --max-time 20 https://developer.android.com/develop/adaptive-apps/quality-guidelines/core-app-quality -o doctor-evidence/research/android-quality.html
+          curl -fsSL --max-time 20 https://source.android.com/docs/security/best-practices/app -o doctor-evidence/research/android-security.html
+
+      - name: Static exhaustive audit
+        shell: bash
+        run: |
+          set +e
+          if [[ -x .github/scripts/full-system-exhaustive-audit.sh ]]; then
+            .github/scripts/full-system-exhaustive-audit.sh
+            rc=$?
+          else
+            echo 'AUDIT SCRIPT MISSING' | tee doctor-evidence/static-audit.txt
+            rc=2
+          fi
+          cp FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt doctor-evidence/static-audit.txt 2>/dev/null || true
+          cp FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt doctor-evidence/static-errors.txt 2>/dev/null || true
+          echo "static_audit_rc=$rc" >> doctor-evidence/static-audit.txt
+          exit 0
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Autonomous diagnosis and repair
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          copilot --autopilot --yolo --max-autopilot-continues 12 -p '
+          You are the overnight senior Android architect and repair engineer for KUNAL Universal Video.
+
+          GOAL: continuously improve the existing product toward production-grade quality without breaking working behavior. Work from evidence, never from guesses.
+
+          FIRST: read the entire repository relevant to the Android app, the 13-stage contracts, all audit reports in doctor-evidence, the current packaged Android project, and the authoritative QUALITY_BASELINE.md. Inspect every relevant small component, not only large files.
+
+          RESEARCH: use the downloaded official Android guidance in doctor-evidence/research as the baseline. When choosing among implementations, compare the strongest available options for correctness, Android compatibility, lifecycle safety, performance, security, maintenance, testability, and production maturity. Prefer official Android/Jetpack APIs where they are objectively strongest. Do not blindly replace a working implementation just because another library exists.
+
+          ROOT-CAUSE RULE: identify the first real defect. Distinguish app defects from CI/emulator/infrastructure limitations. Never hide a failure, skip a test, weaken an assertion, or manufacture PASS.
+
+          REPAIR RULE: make only evidence-backed source/project repairs. Preserve package com.kunal.universalvideo, the 13-stage architecture, working features, and the real mobile/controller/video-generation intent. Do not replace the project with a toy implementation. Do not edit .github/workflows files. Do not modify secrets or credentials.
+
+          MICRO-COMPONENT RULE: inspect constants, strings, APIs, permissions, dependencies, timeouts, retries, parsers, serializers, fallbacks, media codecs, lifecycle callbacks, error handling, persistence, and cleanup paths. If a component has alternatives, record why the selected one is stronger.
+
+          VERIFICATION RULE: after every repair, run the narrowest relevant test first, then build, then emulator/runtime verification. For deterministic invariants, stress-test 10000 iterations where practical. Exercise boundary, empty, Unicode, malformed, timeout, cancellation, restart, process-death, and recovery cases where applicable.
+
+          FAIL-CONTINUE RULE: if one test fails, preserve the exact evidence and continue independent diagnostics. Do not stop the whole engineering pass just because one cell failed.
+
+          RELEASE RULE: never publish a repaired APK or commit a project repair as verified unless the relevant build/runtime gate actually passes. A static PASS is not a device PASS. An emulator PASS is not a physical-device PASS.
+
+          AUTO-COMMIT RULE: only commit project changes after the real available verification gates pass. Never commit a workflow change from this job. If no proven defect exists, make no speculative change.
+
+          At the end write doctor-evidence/DOCTOR_REPORT.md containing: exact findings, files inspected, alternatives considered, repairs made, tests executed, iteration counts, remaining blockers, and a strict verdict of VERIFIED / NOT_VERIFIED. 
+          '
+
+      - name: Rebuild and emulator gate
+        id: gate
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          force-avd-creation: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-metrics
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -euo pipefail
+            rm -rf verification-package
+            mkdir -p verification-package
+            if [[ -f KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip ]]; then
+              unzip -q KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip -d verification-package
+              PROJECT_DIR="$(find verification-package -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+            else
+              PROJECT_DIR="$(find . -type f -name settings.gradle.kts -print -quit | xargs -r dirname)"
+            fi
+            test -n "$PROJECT_DIR"
+            export PROJECT_DIR
+            bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
+
+      - name: Enforce no workflow self-edit and collect diff
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          git status --short > doctor-evidence/git-status.txt
+          git diff --name-only > doctor-evidence/changed-files.txt
+          if git diff --name-only | grep -E '^\.github/workflows/' >/dev/null; then
+            echo 'FORBIDDEN_WORKFLOW_CHANGE' | tee doctor-evidence/VERDICT.txt
+            exit 1
+          fi
+          if [[ "${{ steps.gate.outcome }}" == "success" ]]; then
+            echo 'RUNTIME_GATE=PASS' | tee -a doctor-evidence/VERDICT.txt
+          else
+            echo 'RUNTIME_GATE=FAIL_OR_UNPROVEN' | tee -a doctor-evidence/VERDICT.txt
+          fi
+
+      - name: Commit only verified project repair
+        if: ${{ steps.gate.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'kunalledade959-bot'
+          git config user.email 'kunalledade959-bot@users.noreply.github.com'
+          git add -A
+          git reset -- .github/workflows || true
+          if git diff --cached --quiet; then
+            echo 'No verified project changes.'
+          else
+            git commit -m 'fix: autonomous overnight production hardening'
+            git push origin main
+          fi
+
+      - name: Upload doctor evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-night-doctor-${{ github.run_number }}
+          path: doctor-evidence/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Final verdict
+        if: always()
+        shell: bash
+        run: |
+          echo 'Night Doctor completed. Evidence is authoritative.'
+          if [[ "${{ steps.gate.outcome }}" == "success" ]]; then
+            echo 'VERDICT=VERIFIED_RUNTIME_GATE'
+          else
+            echo 'VERDICT=NOT_VERIFIED'
+            exit 1
+          fi
