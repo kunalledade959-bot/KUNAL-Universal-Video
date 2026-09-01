@@ -1,12 +1,13 @@
 name: Run All Systems Independently
+
+# Intentionally manual-only. A code push must never fan out into 13 sequence runs.
 on:
   workflow_dispatch:
-  push:
-    paths:
-      - ".github/workflows/run-all-sequences.yml"
+
 permissions:
   actions: write
   contents: read
+
 jobs:
   launch:
     runs-on: ubuntu-latest
