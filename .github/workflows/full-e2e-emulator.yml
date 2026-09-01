@@ -1,8 +1,6 @@
 name: Full E2E Emulator Gate
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
