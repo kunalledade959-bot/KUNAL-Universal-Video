@@ -12,10 +12,29 @@ fi
 APK="${APKS[0]}"
 echo "APK_RESOLVED=$APK"
 
+# setup-android installs the emulator under ANDROID_HOME but does not guarantee
+# that the emulator directory is present in PATH after a later sdkmanager install.
+ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/Android/Sdk}}"
+export ANDROID_HOME
+export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/cmdline-tools/16.0/bin:$PATH"
+
 ADB="$(command -v adb || true)"
 EMULATOR="$(command -v emulator || true)"
-[ -x "$ADB" ] || { echo "ADB_MISSING"; exit 1; }
-[ -x "$EMULATOR" ] || { echo "EMULATOR_MISSING"; exit 1; }
+if [ ! -x "$ADB" ]; then
+  echo "ADB_MISSING PATH=$PATH"
+  find "$ANDROID_HOME" -maxdepth 3 -type f \( -name adb -o -name emulator \) -print 2>/dev/null | sort || true
+  exit 1
+fi
+if [ ! -x "$EMULATOR" ]; then
+  echo "EMULATOR_MISSING PATH=$PATH"
+  echo "ANDROID_HOME=$ANDROID_HOME"
+  find "$ANDROID_HOME" -maxdepth 3 -type f -name emulator -print 2>/dev/null | sort || true
+  exit 1
+fi
+echo "ADB_RESOLVED=$ADB"
+echo "EMULATOR_RESOLVED=$EMULATOR"
+
 ADB_TIMEOUT=90
 DEVICE="emulator-5554"
 
