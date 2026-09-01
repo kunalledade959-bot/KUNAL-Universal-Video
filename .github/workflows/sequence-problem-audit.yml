@@ -1,8 +1,6 @@
 name: 13-Stage Problem Audit
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -47,7 +45,6 @@ jobs:
             10: ['private fun audioAndRecord(', 'TTS synthesis did not produce usable audio', 'Recording stopped but no real MediaStore video was produced'],
             11: ['private fun assembleEdit(', 'No recorded visual clip found', 'required media track missing'],
             12: ['private fun verifyAndFix(', 'Gallery output stream unavailable', 'FINAL'],
-            # Stage 13 dependency is validated structurally, not by one exact human-readable error string.
             13: ['private fun finalExport(', 'if(!begin(13))return', 'FINAL']
           }
           report = ['# Source-backed 13-stage audit', '', 'This report checks stage implementation and explicit failure/evidence markers. It does not replace physical-device execution.', '']
