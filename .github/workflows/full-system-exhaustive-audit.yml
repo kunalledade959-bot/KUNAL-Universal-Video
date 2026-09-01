@@ -7,6 +7,10 @@ on:
         description: 'Audit scope (always full repository; label only)'
         required: false
         default: 'FULL-A-TO-Z'
+  push:
+    branches: [main]
+    paths:
+      - '.github/one-shot/full-system-exhaustive-audit.trigger'
 
 permissions:
   contents: read
