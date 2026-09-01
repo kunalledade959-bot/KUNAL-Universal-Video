@@ -62,13 +62,26 @@ recover_system_ui(){
       if is_production_ui "$xml"; then return 0; fi
       if system_ui_anr "$xml"; then
         echo "SYSTEM_UI_ANR_DETECTED attempt=$attempt"
+        # First use the normal Android recovery path.
         adb shell input tap 540 1059 >/dev/null 2>&1 || true
         sleep 4
+        # If System UI remains wedged, restart only the emulator's System UI
+        # process. This is test-environment recovery, not a production-app fix.
+        if [ "$attempt" -ge 3 ]; then
+          echo "SYSTEM_UI_ANR_PERSISTENT=1"
+          adb shell am force-stop com.android.systemui >/dev/null 2>&1 || true
+          sleep 6
+          adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
+          adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
+          adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-systemui-relaunch.txt 2>&1 || true
+          sleep 8
+        fi
         continue
       fi
     fi
     sleep 2
-done
+  done
   return 1
 }
 
@@ -97,8 +110,7 @@ done
 echo "UI_TOP=PASS"
 
 # Traverse the actual scroll container instead of assuming one swipe reaches
-# stages 12/13. Each iteration records a fresh hierarchy. This avoids both
-# false failures from a short swipe and false passes from stale XML.
+# stages 12/13. Each iteration records a fresh hierarchy.
 BOTTOM_PASS=0
 for attempt in $(seq 1 10); do
   ensure_production_foreground e2e-ui-scroll-${attempt}.xml || fail "Production UI lost during scroll attempt ${attempt}"
@@ -130,9 +142,9 @@ ensure_production_foreground e2e-ui-restart.xml || fail "Production Activity not
 PID2="$(adb shell pidof "$PKG" | tr -d '\r' || true)"
 [ -n "$PID2" ] || fail "App process not alive after restart"
 
-aadb_logcat="e2e-logcat.txt"
-adb logcat -d -t 4000 > "$aadb_logcat"
-if grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\.kunal\.universalvideo.*has died' "$aadb_logcat"; then
+adb_logcat="e2e-logcat.txt"
+adb logcat -d -t 4000 > "$adb_logcat"
+if grep -Eiq 'FATAL EXCEPTION|AndroidRuntime.*FATAL|Process: com\.kunal\.universalvideo.*has died' "$adb_logcat"; then
   fail "Fatal crash evidence found"
 fi
 
