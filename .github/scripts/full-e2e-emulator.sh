@@ -25,6 +25,11 @@ for attempt in $(seq 1 120); do
 done
 [ "$ADB_READY" -eq 1 ] || fail "ADB/package service did not become ready"
 
+# Fresh emulator preflight: clear stale Settings UI before touching the production app.
+adb shell input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
+adb shell am force-stop com.android.settings >/dev/null 2>&1 || true
+sleep 3
+
 adb install --no-streaming -r "$APK" >/dev/null || fail "APK install failed"
 adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
 adb logcat -c
@@ -50,9 +55,39 @@ is_production_ui(){
   grep -q "package=\"$PKG\"" "$xml" && grep -q "Kunal Universal Video" "$xml"
 }
 
-system_ui_anr(){
+anr_dialog(){
   local xml="$1"
-  grep -Fq "System UI isn't responding" "$xml"
+  grep -Eq "isn't responding|is not responding" "$xml"
+}
+
+recover_anr(){
+  local xml="$1"
+  if ! anr_dialog "$xml"; then return 1; fi
+  echo "ANR_DIALOG_DETECTED"
+  if grep -Fq 'Settings isn\x27t responding' "$xml"; then
+    echo "SETTINGS_ANR_DETECTED"
+    # Close the wedged Settings process, then return to Home before relaunching production.
+    adb shell input tap 540 933 >/dev/null 2>&1 || true
+    sleep 3
+    adb shell am force-stop com.android.settings >/dev/null 2>&1 || true
+  else
+    # For System UI or another transient system dialog, first use Android's normal Wait action.
+    adb shell input tap 540 1059 >/dev/null 2>&1 || true
+    sleep 4
+    if dump_ui "$xml" && anr_dialog "$xml"; then
+      echo "SYSTEM_ANR_PERSISTENT=1"
+      if grep -Fq 'System UI isn\x27t responding' "$xml"; then
+        adb shell am force-stop com.android.systemui >/dev/null 2>&1 || true
+        sleep 6
+      fi
+    fi
+  fi
+  adb shell input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
+  sleep 2
+  adb shell am force-stop "$PKG" >/dev/null 2>&1 || true
+  adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-anr-relaunch.txt 2>&1 || true
+  sleep 8
+  return 0
 }
 
 recover_system_ui(){
@@ -60,28 +95,14 @@ recover_system_ui(){
   for attempt in $(seq 1 24); do
     if dump_ui "$xml"; then
       if is_production_ui "$xml"; then return 0; fi
-      if system_ui_anr "$xml"; then
-        echo "SYSTEM_UI_ANR_DETECTED attempt=$attempt"
-        # First use the normal Android recovery path.
-        adb shell input tap 540 1059 >/dev/null 2>&1 || true
-        sleep 4
-        # If System UI remains wedged, restart only the emulator's System UI
-        # process. This is test-environment recovery, not a production-app fix.
-        if [ "$attempt" -ge 3 ]; then
-          echo "SYSTEM_UI_ANR_PERSISTENT=1"
-          adb shell am force-stop com.android.systemui >/dev/null 2>&1 || true
-          sleep 6
-          adb shell settings put global window_animation_scale 0.0 >/dev/null 2>&1 || true
-          adb shell settings put global transition_animation_scale 0.0 >/dev/null 2>&1 || true
-          adb shell settings put global animator_duration_scale 0.0 >/dev/null 2>&1 || true
-          adb shell am start -W -n "$PKG/.MainActivity" >/tmp/e2e-systemui-relaunch.txt 2>&1 || true
-          sleep 8
-        fi
+      if anr_dialog "$xml"; then
+        echo "SYSTEM_OR_SETTINGS_ANR_DETECTED attempt=$attempt"
+        recover_anr "$xml" || true
         continue
       fi
     fi
     sleep 2
-  done
+done
   return 1
 }
 
@@ -89,8 +110,8 @@ ensure_production_foreground(){
   local xml="$1"
   dump_ui "$xml" || return 1
   if is_production_ui "$xml"; then return 0; fi
-  if system_ui_anr "$xml"; then
-    recover_system_ui || return 1
+  if anr_dialog "$xml"; then
+    recover_anr "$xml" || true
   else
     adb shell input keyevent KEYCODE_HOME >/dev/null 2>&1 || true
     sleep 2
