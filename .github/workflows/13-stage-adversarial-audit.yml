@@ -1,12 +1,7 @@
 name: 13-Stage Adversarial Audit
 
+# Manual-only: source changes must not create an extra audit run beside the selected test.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'activity_fixed.kt'
-      - '.github/scripts/13-stage-adversarial-audit.py'
-      - '.github/workflows/13-stage-adversarial-audit.yml'
   workflow_dispatch:
 
 permissions:
