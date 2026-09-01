@@ -1,0 +1,34 @@
+name: Pre-Repair Exhaustive Inventory
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout full repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run read-only exhaustive inventory
+        shell: bash
+        run: |
+          set -u
+          python3 .github/scripts/pre_repair_exhaustive_inventory.py
+          rc=$?
+          echo "INVENTORY_SCRIPT_EXIT=$rc"
+          exit 0
+
+      - name: Upload single complete evidence report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PRE-REPAIR-EXHAUSTIVE-REPORT
+          path: PRE_REPAIR_EXHAUSTIVE_REPORT.md
+          if-no-files-found: error
