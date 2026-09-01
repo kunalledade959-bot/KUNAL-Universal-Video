@@ -61,7 +61,7 @@ jobs:
           if-no-files-found: error
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -128,3 +128,4 @@ jobs:
           if-no-files-found: warn
 
 # Manual verification trigger: keep E2E gate runnable from Actions UI.
+# Runtime wrapper is intentionally invoked as a bash process because the emulator action executes `script` through /bin/sh.
