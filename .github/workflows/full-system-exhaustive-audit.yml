@@ -22,28 +22,21 @@ jobs:
     steps:
       - name: Checkout exact commit
         id: checkout
-        continue-on-error: true
         uses: actions/checkout@v4
 
       - name: Set up Python
         id: python
-        if: always()
-        continue-on-error: true
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Install parser dependencies
         id: deps
-        if: always()
-        continue-on-error: true
         shell: bash
         run: python -m pip install --disable-pip-version-check pyyaml
 
       - name: Materialize packaged Android project for inspection
         id: materialize_android
-        if: always()
-        continue-on-error: true
         shell: bash
         run: |
           set +e
@@ -55,7 +48,7 @@ jobs:
             if [[ -f "$archive" ]] && command -v unzip >/dev/null 2>&1; then
               rm -rf .audit-android
               mkdir -p .audit-android
-              unzip -q "$archive" -d .audit-android
+              unzip -q "$archive" -d .audit-android || continue
               manifest=$(find .audit-android -type f -name AndroidManifest.xml -path '*/app/src/main/*' | head -n 1)
               if [[ -n "$manifest" ]]; then
                 appdir="${manifest%/src/main/AndroidManifest.xml}"
@@ -63,86 +56,55 @@ jobs:
                 rm -rf android
                 cp -a "$androidroot" android
                 echo "ANDROID_SOURCE=archive:$archive"
-                echo "ANDROID_MANIFEST=$manifest"
-                break
+                exit 0
               fi
             fi
           done
-          if [[ ! -f android/app/src/main/AndroidManifest.xml ]]; then
-            echo 'ANDROID_SOURCE=NOT_FOUND'
-          fi
+          echo 'ANDROID_SOURCE=NOT_FOUND'
           exit 0
 
-      - name: Collect complete A-to-Z evidence
+      - name: Run static exhaustive collection
         id: audit
-        if: always()
-        continue-on-error: true
         shell: bash
         run: |
           set +e
-          if [[ -f .github/scripts/full-system-exhaustive-audit.sh ]]; then
-            chmod +x .github/scripts/full-system-exhaustive-audit.sh
-            .github/scripts/full-system-exhaustive-audit.sh
-            rc=$?
-          else
-            printf 'AUDIT_BOOTSTRAP_FAILURE: missing audit script\n' > FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
-            printf 'AUDIT_BOOTSTRAP_FAILURE: missing audit script\n' > FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
-            rc=2
-          fi
+          chmod +x .github/scripts/full-system-exhaustive-audit.sh
+          .github/scripts/full-system-exhaustive-audit.sh
+          rc=$?
           printf '\nBOOTSTRAP_STATUS checkout=%s python=%s dependencies=%s materialize_android=%s audit_rc=%s\n' '${{ steps.checkout.outcome }}' '${{ steps.python.outcome }}' '${{ steps.deps.outcome }}' '${{ steps.materialize_android.outcome }}' "$rc" >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
           exit 0
 
-      - name: Guarantee reports
-        if: always()
-        continue-on-error: true
+      - name: Run 10,000-iteration deterministic invariant stress
+        id: stress
         shell: bash
         run: |
-          set +e
-          [[ -f FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt ]] || printf 'AUDIT REPORT WAS NOT CREATED\n' > FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
-          [[ -f FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt ]] || printf 'AUDIT ERROR FILE WAS NOT CREATED\n' > FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
-          {
-            echo
-            echo '===== WORKFLOW STEP OUTCOMES ====='
-            echo "checkout=${{ steps.checkout.outcome }}"
-            echo "python=${{ steps.python.outcome }}"
-            echo "dependencies=${{ steps.deps.outcome }}"
-            echo "materialize_android=${{ steps.materialize_android.outcome }}"
-            echo "audit=${{ steps.audit.outcome }}"
-            echo '===== END WORKFLOW STEP OUTCOMES ====='
-          } >> FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
-          exit 0
+          python .github/scripts/ten-thousand-invariant-stress.py | tee TEN_THOUSAND_INVARIANT_STRESS.txt
 
-      - name: Print complete evidence
+      - name: Publish authoritative verdict
         if: always()
-        continue-on-error: true
         shell: bash
         run: |
-          echo '===== FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt ====='
-          cat FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt || true
-          echo '===== FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt ====='
-          cat FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt || true
-          exit 0
+          static_fail=0
+          grep -q 'FINAL_VERDICT=FAIL_STATIC_EXHAUSTIVE' FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt 2>/dev/null && static_fail=1
+          stress_pass=0
+          grep -q '10K_INVARIANT_STRESS_PASS iterations=10000' TEN_THOUSAND_INVARIANT_STRESS.txt 2>/dev/null && stress_pass=1
+          echo "STATIC_AUDIT_FAIL=$static_fail"
+          echo "TEN_K_STRESS_PASS=$stress_pass"
+          if (( static_fail == 0 && stress_pass == 1 )); then
+            echo 'FINAL_VERDICT=PASS_STATIC_AND_DETERMINISTIC_STRESS'
+          else
+            echo 'FINAL_VERDICT=FAIL_STATIC_OR_DETERMINISTIC_STRESS'
+            exit 1
+          fi
 
       - name: Upload complete evidence bundle
         if: always()
-        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: full-system-exhaustive-audit-${{ github.run_number }}
           path: |
             FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
             FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+            TEN_THOUSAND_INVARIANT_STRESS.txt
           if-no-files-found: warn
           retention-days: 30
-
-      - name: Publish verdict without aborting collection job
-        if: always()
-        shell: bash
-        run: |
-          if grep -q 'FINAL_VERDICT=FAIL_STATIC_EXHAUSTIVE' FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt 2>/dev/null; then
-            echo 'FINAL VERDICT: FAIL_STATIC_EXHAUSTIVE'
-          else
-            echo 'FINAL VERDICT: PASS_STATIC_EXHAUSTIVE'
-          fi
-          echo 'Collection completed. Evidence is authoritative; verdict does not abort the collector.'
-          exit 0
