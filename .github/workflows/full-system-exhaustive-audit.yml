@@ -1,0 +1,67 @@
+name: Full System Exhaustive Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'Audit scope (always full repository; label only)'
+        required: false
+        default: 'FULL-A-TO-Z'
+
+permissions:
+  contents: read
+
+jobs:
+  exhaustive-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python for syntax checks
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install audit parser dependencies
+        run: python -m pip install --disable-pip-version-check pyyaml
+
+      - name: Run complete non-blocking A-to-Z audit
+        id: audit
+        continue-on-error: true
+        shell: bash
+        run: |
+          chmod +x .github/scripts/full-system-exhaustive-audit.sh
+          .github/scripts/full-system-exhaustive-audit.sh
+
+      - name: Print complete final report
+        if: always()
+        shell: bash
+        run: |
+          echo '===== FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt ====='
+          cat FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
+          echo '===== FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt ====='
+          cat FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt || true
+
+      - name: Upload one complete evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-system-exhaustive-audit-${{ github.run_number }}
+          path: |
+            FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt
+            FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish final verdict
+        if: always()
+        shell: bash
+        run: |
+          if grep -q 'FINAL_VERDICT=FAIL_STATIC_EXHAUSTIVE' FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt; then
+            echo 'FINAL VERDICT: FAIL_STATIC_EXHAUSTIVE'
+            echo 'Complete evidence was collected. Fixes must be based on the recorded failures.'
+            exit 1
+          fi
+          echo 'FINAL VERDICT: PASS_STATIC_EXHAUSTIVE'
