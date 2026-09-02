@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CONTRACT = ROOT / "production_truth_contract.json"
 ACTIVITY = ROOT / "activity_fixed.kt"
 GATE = ROOT / "stage_gate.kt"
+REPAIR = ROOT / "pro_repair_v3.py"
 
 errors: list[str] = []
 findings: list[str] = []
@@ -40,8 +41,10 @@ except Exception as exc:
 
 activity = ACTIVITY.read_text(encoding="utf-8") if ACTIVITY.is_file() else ""
 gate = GATE.read_text(encoding="utf-8") if GATE.is_file() else ""
+repair = REPAIR.read_text(encoding="utf-8") if REPAIR.is_file() else ""
 if not ACTIVITY.is_file(): error("activity_fixed.kt missing")
 if not GATE.is_file(): error("stage_gate.kt missing")
+if not REPAIR.is_file(): error("pro_repair_v3.py missing")
 
 if contract.get("schema") != 2: error("contract schema must be 2")
 if contract.get("app_id") != "com.kunal.universalvideo": error("contract app_id mismatch")
@@ -60,14 +63,12 @@ for s in stages:
 
 vocab = contract.get("vocabulary", {})
 required_groups = {"APP_NAME", "STATUS_MESSAGES", "ERROR_MESSAGES", "SCENE_FIELDS", "AUDIO_LABELS", "EXPORT_METADATA", "PROMPT_FIELDS", "MATERIAL_RULES"}
-missing_groups = sorted(required_groups - set(vocab))
-for g in missing_groups: error(f"missing vocabulary group: {g}")
+for g in sorted(required_groups - set(vocab)): error(f"missing vocabulary group: {g}")
 for group_name, group in vocab.items():
     vals = values_of(group)
     if not vals: error(f"empty vocabulary group: {group_name}")
     for value in vals:
-        if not isinstance(value, str) or not value.strip():
-            error(f"empty vocabulary value in {group_name}")
+        if not isinstance(value, str) or not value.strip(): error(f"empty vocabulary value in {group_name}")
         if any(token in value.upper() for token in ("TODO", "FIXME", "PLACEHOLDER")):
             error(f"placeholder vocabulary value in {group_name}: {value!r}")
 
@@ -76,6 +77,22 @@ if "object ProductionTruth" not in activity: error("ProductionTruth authority mi
 if activity.count("ProductionTruth.button(") != 13: error("APK UI does not contain exactly 13 registry-bound button references")
 if "ProductionTruth.stageNames" not in gate: error("StageGate is not bound to ProductionTruth.stageNames")
 if "DO NOT EDIT MANUALLY" not in activity: error("generated authority marker missing")
+
+# Real Stage-2 connection invariants. These are source-level prerequisites for
+# physical-device verification, never a substitute for that verification.
+stage2_requirements = {
+    "stage2_async_binding_wait": "UniversalAccessibilityService.instance==null",
+    "stage2_binding_timeout": "System.currentTimeMillis()+8000",
+    "stage2_health_endpoint": '"/health"',
+    "stage2_status_endpoint": '"/status"',
+    "stage2_ping_protocol": "ControllerProtocol.PING",
+    "stage2_pong_protocol": '"PONG"',
+    "stage2_session_binding": 'session_id",
+    "stage2_service_bound_status": '"service_bound"',
+}
+for name, needle in stage2_requirements.items():
+    if needle not in activity and needle not in repair:
+        error(f"Stage 2 handshake invariant missing: {name}")
 
 # Truth-control invariants.
 for symbol in ("resetForRepair", "invalidateDownstream", "validEvidence", "commit()", 'put("sha256"', 'put("run_id"', "State.RUNNING"):
