@@ -9,6 +9,7 @@ on:
       - "stage_gate.kt"
       - "production_truth_contract.json"
       - ".github/scripts/production_truth_*.py"
+      - ".github/scripts/top1_exhaustive_truth_cell.py"
       - ".github/scripts/production_truth_pipeline.sh"
       - ".github/scripts/production_truth_audit.py"
       - "pro_repair_v3.py"
@@ -166,3 +167,5 @@ jobs:
             emulator-restart-logcat.txt
             adb-devices.txt
           if-no-files-found: ignore
+
+# Production build trigger: keep the final build workflow explicitly coupled to the Top-1 truth cell.
