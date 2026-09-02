@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "app_id": "com.kunal.universalvideo",
+  "stage_count": 13,
+  "stages": [
+    {"id":1,"name":"Startup / Self-Diagnostic","button":"1 • START / DIAGNOSTIC"},
+    {"id":2,"name":"Mobile Connection / Permissions","button":"2 • ENABLE ACCESSIBILITY / CONNECT"},
+    {"id":3,"name":"Target APK Selection","button":"3 • SELECT / SAVE TARGET"},
+    {"id":4,"name":"Study Selected APK","button":"4 • STUDY SELECTED APK"},
+    {"id":5,"name":"Story Input","button":"5 • SAVE STORY INPUT"},
+    {"id":6,"name":"Operate Selected Target APK","button":"6 • OPERATE SELECTED TARGET"},
+    {"id":7,"name":"Deep Target-App Understanding","button":"7 • DEEP TARGET UNDERSTANDING"},
+    {"id":8,"name":"Exact Scene Plan","button":"8 • CREATE EXACT SCENE PLAN"},
+    {"id":9,"name":"Production Plan / Prompts","button":"9 • BUILD PRODUCTION PLAN / PROMPTS"},
+    {"id":10,"name":"Audio / Voice / Music / Sound Effects","button":"10 • CREATE AUDIO / VOICE / MUSIC / SFX + RECORD"},
+    {"id":11,"name":"Assemble / Edit","button":"11 • ASSEMBLE / EDIT"},
+    {"id":12,"name":"Verify / Auto-Fix","button":"12 • VERIFY / AUTO-FIX"},
+    {"id":13,"name":"Final Gallery Export","button":"13 • FINAL GALLERY EXPORT"}
+  ],
+  "pass_rule": "A stage is PASS only after real runtime observation produces non-empty, schema-valid, hash-valid evidence for its current run. Downstream PASS states are invalidated whenever an upstream stage is repaired or fails.",
+  "release_rule": "Release only after the same production implementation passes build verification, independent stages 01-13, real-device verification, adversarial recovery tests, and final evidence audit."
+}
