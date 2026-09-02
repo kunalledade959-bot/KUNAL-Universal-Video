@@ -12,7 +12,7 @@ s = p.read_text(encoding="utf-8")
 start8 = s.index("    private fun scenePlan(){")
 end8 = s.index("    private fun buildPlan(){", start8)
 start9 = end8
-end9 = s.index("\n\n    /** 10 creates persistent speech audio", start9)
+end9 = s.index("    private fun audioAndRecord()", start9)
 
 scene = '''    private fun scenePlan(){
         if(!begin(8))return
@@ -64,13 +64,8 @@ build = '''    private fun buildPlan(){
     }
 '''
 
-s = s[:start8] + scene + s[end8:end9]
-# Replace buildPlan while preserving the Stage-10 documentation marker.
-start9 = s.index("    private fun buildPlan(){")
-end9 = s.index("\n\n    /** 10 creates persistent speech audio", start9)
-s = s[:start9] + build + s[end9:]
+s = s[:start8] + scene + build + s[end9:]
 
-# No regex whitespace escape is allowed in the production controller.
 if "Regex(\"(?<=[.!?])" in s or "\\\\s+\"" in s:
     raise SystemExit("PRODUCTION_TRUTH_RUNTIME_FIX: Kotlin regex escape remained in controller")
 if "take(30)" in s:
