@@ -49,13 +49,13 @@ run_step() {
   return 0
 }
 
-# CELL 1 is the single top-1 repair/audit gate. It fixes the currently known
-# failures first, then independently checks the complete 13-stage contract.
-# It never aborts early: every check is collected and the full report is printed.
-run_step "top1-exhaustive-repair-and-audit" python3 .github/scripts/top1_exhaustive_truth_cell.py
+# Transform the source first. The top-1 exhaustive cell must audit the FINAL
+# generated/patched source, not the pre-codegen template. It also repairs the
+# remaining known contract/runtime defects before the independent audit cells.
 run_step "contract-codegen" python3 .github/scripts/production_truth_codegen.py
 run_step "production-truth-patch" python3 .github/scripts/production_truth_patch.py
 run_step "production-truth-runtime-fix" python3 .github/scripts/production_truth_runtime_fix.py
+run_step "top1-exhaustive-repair-and-audit" python3 .github/scripts/top1_exhaustive_truth_cell.py
 run_step "production-truth-audit" python3 .github/scripts/production_truth_audit.py
 
 # Independent source invariants continue even if a mutation step failed.
