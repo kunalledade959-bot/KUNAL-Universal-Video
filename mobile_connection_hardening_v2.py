@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Deterministic Stage-2 hardening. No fake connection state."""
+"""Deterministic Stage-2 hardening. No fake connection state.
+
+The patch is intentionally shape-tolerant at the method boundary because the
+progressive UI layer may insert a stage comment between connectMobile() and
+selectTarget(). It remains idempotent and fail-closed.
+"""
 from pathlib import Path
 import re
 
@@ -9,7 +14,7 @@ if not activity.is_file() or not repair.is_file():
     raise SystemExit("MOBILE_HARDEN_V2: required source missing")
 
 a = activity.read_text(encoding="utf-8")
-old = re.search(r"    private fun connectMobile\(\)\{.*?\n    \}\n    private fun selectTarget", a, re.S)
+
 new = '''    private fun connectMobile(){
         if(!begin(2))return
         if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service is not enabled");openAccessibility();return}
@@ -30,11 +35,20 @@ new = '''    private fun connectMobile(){
             }
         }.start()
     }
-    private fun selectTarget'''
-if not old:
-    raise SystemExit("MOBILE_HARDEN_V2: Stage 2 block not found")
-a = a[:old.start()] + new + a[old.end():]
-a = a.replace("/** Production 1..13 workflow controller.", "/** MOBILE_HARDEN_V2: Stage 2 is asynchronous so service binding can complete. */\n/** Production 1..13 workflow controller.", 1)
+'''
+
+# Replace only the Stage-2 method body. Do not depend on comments between stages.
+pat = re.compile(r"(?ms)^    private fun connectMobile\(\)\{.*?^    \}(?=\s*/\*\* Stage 3|\s*private fun selectTarget)")
+match = pat.search(a)
+if match:
+    a = a[:match.start()] + new.rstrip() + a[match.end():]
+elif "MOBILE_HARDEN_V2: Stage 2 is asynchronous" in a and "REAL DEVICE CONTROL CHANNEL VERIFIED: bound AccessibilityService + controller health/status + PING/PONG" in a:
+    pass
+else:
+    raise SystemExit("MOBILE_HARDEN_V2: Stage 2 method boundary not found")
+
+if "MOBILE_HARDEN_V2: Stage 2 is asynchronous" not in a:
+    a = a.replace("/** Production 1..13 workflow controller.", "/** MOBILE_HARDEN_V2: Stage 2 is asynchronous so service binding can complete. */\n/** Production 1..13 workflow controller.", 1)
 activity.write_text(a, encoding="utf-8")
 
 s = repair.read_text(encoding="utf-8")
