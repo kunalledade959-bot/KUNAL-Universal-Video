@@ -53,6 +53,34 @@ jobs:
         with:
           gradle-version: "8.9"
 
+      - name: Production integrity gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="$(find "$PROJECT_DIR" -type f -name 'activity_fixed.kt' -print -quit)"
+          test -s "$SRC"
+          BUTTON_COUNT="$(grep -Ec 'button\("[0-9]+ •' "$SRC" || true)"
+          test "$BUTTON_COUNT" -eq 13
+          for n in $(seq 1 13); do
+            grep -Eq "if\(!begin\($n\)\)return" "$SRC"
+          done
+          grep -Fq 'UniversalAccessibilityService.instance!=null' "$SRC"
+          grep -Fq 'Selected target disappeared from installed-app list' "$SRC"
+          grep -Fq 'Selected target has no launchable activity' "$SRC"
+          grep -Fq 'Target selected but AccessibilityService is not currently bound' "$SRC"
+          grep -Fq 'Target selected but real controller target handshake failed' "$SRC"
+          if grep -Fq 'Thread.sleep' "$SRC"; then
+            echo 'INTEGRITY_FAIL: UI-blocking Thread.sleep remains in authoritative activity'
+            exit 1
+          fi
+          grep -Fq 'postDelayed({waitForTargetForeground' "$SRC"
+          grep -Fq 'TTS synthesis did not produce usable audio' "$SRC"
+          grep -Fq 'Recording stopped but no real MediaStore video was produced' "$SRC"
+          grep -Fq 'required media track missing' "$SRC"
+          grep -Fq 'MP4 has no readable tracks' "$SRC"
+          grep -Fq 'Gallery insert failed' "$SRC"
+          echo 'INTEGRITY_PASS: 13-stage gate structure, real target verification, non-blocking stage 6, media evidence and export failure paths verified'
+
       - name: Build APK before emulator
         shell: bash
         run: |
