@@ -49,6 +49,10 @@ run_step() {
   return 0
 }
 
+# CELL 1 is the single top-1 repair/audit gate. It fixes the currently known
+# failures first, then independently checks the complete 13-stage contract.
+# It never aborts early: every check is collected and the full report is printed.
+run_step "top1-exhaustive-repair-and-audit" python3 .github/scripts/top1_exhaustive_truth_cell.py
 run_step "contract-codegen" python3 .github/scripts/production_truth_codegen.py
 run_step "production-truth-patch" python3 .github/scripts/production_truth_patch.py
 run_step "production-truth-runtime-fix" python3 .github/scripts/production_truth_runtime_fix.py
@@ -65,6 +69,7 @@ run_step "kotlin-source-integrity" bash -c '
   grep -Fq "ProductionTruth.stageNames" stage_gate.kt || { echo "ERROR: StageGate is not registry-bound"; rc=1; }
   if grep -Fq ".take(30)" activity_fixed.kt; then echo "ERROR: silent scene truncation remains"; rc=1; fi
   if grep -Fq "VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character" activity_fixed.kt; then echo "ERROR: generic prompt replacement remains"; rc=1; fi
+  if grep -Fq "},1500)" activity_fixed.kt; then echo "ERROR: fixed 1500ms recording wait remains"; rc=1; fi
   exit "$rc"
 '
 
@@ -81,6 +86,7 @@ assert len({s["button"] for s in o["stages"]}) == 13
 for group, values in o["vocabulary"].items():
     vals=list(values.values()) if isinstance(values,dict) else (values if isinstance(values,list) else [values])
     assert all(isinstance(v,str) and v.strip() for v in vals), group
+    assert not any(any(t in v.upper() for t in ("TODO","FIXME","PLACEHOLDER")) for v in vals), group
 print("CONTRACT_JSON_PASS")
 '
 
