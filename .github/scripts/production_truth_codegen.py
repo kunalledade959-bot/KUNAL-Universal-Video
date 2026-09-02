@@ -89,6 +89,29 @@ if not errors:
 
     marker_start = "// <PRODUCTION_TRUTH_AUTHORITY>"
     marker_end = "// </PRODUCTION_TRUTH_AUTHORITY>"
+    # Strip any previous generated block before editing the hand-written UI.
+    if marker_start in activity and marker_end in activity:
+        activity = re.sub(
+            re.escape(marker_start) + r".*?" + re.escape(marker_end) + r"\n*",
+            "",
+            activity,
+            count=1,
+            flags=re.DOTALL,
+        )
+
+    # Bind every canonical button string outside the generated block. This works
+    # both before and after the progressive single-stage UI patch, whose structure
+    # uses listOf("label" to { ... }) rather than button("label").
+    for s in stages:
+        raw = kotlin_string(s["button"])
+        replacement = f"ProductionTruth.button({s['id']})"
+        count = activity.count(raw)
+        if count != 1:
+            fail(f"canonical button label for stage {s['id']} expected exactly once before binding, found {count}")
+        else:
+            activity = activity.replace(raw, replacement, 1)
+            changes.append(f"stage {s['id']} button bound to ProductionTruth")
+
     generated = [
         marker_start,
         "/** GENERATED from production_truth_contract.json. DO NOT EDIT MANUALLY. */",
@@ -117,36 +140,13 @@ if not errors:
     ]
     block = "\n".join(generated) + "\n\n"
 
-    if marker_start in activity and marker_end in activity:
-        activity = re.sub(
-            re.escape(marker_start) + r".*?" + re.escape(marker_end) + r"\n*",
-            block,
-            activity,
-            count=1,
-            flags=re.DOTALL,
-        )
-        changes.append("refreshed generated ProductionTruth authority")
+    anchor = "class MainActivity"
+    if anchor not in activity:
+        fail("MainActivity class anchor missing")
     else:
-        anchor = "class MainActivity"
-        if anchor not in activity:
-            fail("MainActivity class anchor missing")
-        else:
-            activity = activity.replace(anchor, block + anchor, 1)
-            changes.append("inserted generated ProductionTruth authority")
+        activity = activity.replace(anchor, block + anchor, 1)
+        changes.append("inserted generated ProductionTruth authority")
 
-    # Replace the 13 canonical button literals. Require exactly one replacement
-    # for each, so a missing/duplicate UI control cannot silently pass.
-    for s in stages:
-        literal = f'button({json.dumps(s["button"], ensure_ascii=False)})'
-        replacement = f"button(ProductionTruth.button({s['id']}))"
-        count = activity.count(literal)
-        if count != 1:
-            fail(f"button literal occurrence for stage {s['id']} expected 1, found {count}")
-        else:
-            activity = activity.replace(literal, replacement, 1)
-            changes.append(f"stage {s['id']} button bound to ProductionTruth")
-
-    # Replace the hard-coded StageGate name array with the generated registry.
     pattern = re.compile(
         r'private val stages = arrayOf\(.*?\)\.mapIndexed \{ i, n -> Stage\(i \+ 1, n\) \}\.toMutableList\(\)',
         re.DOTALL,
@@ -154,15 +154,21 @@ if not errors:
     replacement = 'private val stages = ProductionTruth.stageNames.mapIndexed { i, n -> Stage(i + 1, n) }.toMutableList()'
     gate, n = pattern.subn(replacement, gate, count=1)
     if n != 1:
-        fail(f"StageGate stage-name authority replacement expected 1, found {n}")
+        # A previous generated binding is already authoritative. Do not fail merely
+        # because this is a repeated idempotent invocation.
+        if "ProductionTruth.stageNames" in gate:
+            changes.append("StageGate already bound to ProductionTruth")
+        else:
+            fail(f"StageGate stage-name authority replacement expected 1, found {n}")
     else:
         changes.append("StageGate stage names bound to ProductionTruth")
 
-    # The generated authority must be the actual source used by both components.
     if "ProductionTruth.button(13)" not in activity:
         fail("generated button authority not present for stage 13")
     if "ProductionTruth.stageNames" not in gate:
         fail("StageGate is not bound to generated stage names")
+    if activity.count("ProductionTruth.button(") != 13:
+        fail("activity must contain exactly 13 ProductionTruth button bindings")
 
     ACTIVITY.write_text(activity, encoding="utf-8")
     GATE.write_text(gate, encoding="utf-8")
