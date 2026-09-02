@@ -72,14 +72,11 @@ for group_name, group in vocab.items():
         if any(token in value.upper() for token in ("TODO", "FIXME", "PLACEHOLDER")):
             error(f"placeholder vocabulary value in {group_name}: {value!r}")
 
-# The generated authority must be present and must own all 13 stage labels.
 if "object ProductionTruth" not in activity: error("ProductionTruth authority missing from APK source")
 if activity.count("ProductionTruth.button(") != 13: error("APK UI does not contain exactly 13 registry-bound button references")
 if "ProductionTruth.stageNames" not in gate: error("StageGate is not bound to ProductionTruth.stageNames")
 if "DO NOT EDIT MANUALLY" not in activity: error("generated authority marker missing")
 
-# Real Stage-2 connection invariants. These are source-level prerequisites for
-# physical-device verification, never a substitute for that verification.
 stage2_requirements = {
     "stage2_async_binding_wait": "UniversalAccessibilityService.instance==null",
     "stage2_binding_timeout": "System.currentTimeMillis()+8000",
@@ -87,19 +84,17 @@ stage2_requirements = {
     "stage2_status_endpoint": '"/status"',
     "stage2_ping_protocol": "ControllerProtocol.PING",
     "stage2_pong_protocol": '"PONG"',
-    "stage2_session_binding": 'session_id",
+    "stage2_session_binding": '"session_id"',
     "stage2_service_bound_status": '"service_bound"',
 }
 for name, needle in stage2_requirements.items():
     if needle not in activity and needle not in repair:
         error(f"Stage 2 handshake invariant missing: {name}")
 
-# Truth-control invariants.
 for symbol in ("resetForRepair", "invalidateDownstream", "validEvidence", "commit()", 'put("sha256"', 'put("run_id"', "State.RUNNING"):
     if symbol not in gate: error(f"StageGate missing truth-control symbol: {symbol}")
 if '"final_pass"' not in gate: error("StageGate does not expose final_pass")
 
-# Known unsafe shortcuts are hard failures. The report still collects all of them.
 shortcuts = {
     "silent_scene_truncation": r"\.take\(30\)",
     "generic_prompt_replacement": r"VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character",
@@ -113,7 +108,6 @@ for name, pattern in shortcuts.items():
         findings.append(name)
         error(f"unsafe shortcut present: {name}")
 
-# Explicitly reject a fake evidence path that can mark PASS without the gate.
 for match in re.finditer(r"state\s*=\s*StageGate\.State\.PASS", activity):
     error(f"direct PASS state mutation at source offset {match.start()}")
 
