@@ -48,6 +48,7 @@ class MainActivity : androidx.activity.ComponentActivity() {
         super.onCreate(b); gate=StageGate(this)
         val p=getSharedPreferences(PREFS,MODE_PRIVATE)
         sid=p.getString(SESSION,null)?:UUID.randomUUID().toString(); p.edit().putString(SESSION,sid).apply()
+        target=p.getString(TARGET,"")?:""
         buildUi(p); tts=TextToSpeech(this){ if(it==TextToSpeech.SUCCESS) tts?.language=Locale.US }
         bridge=LocalBridgeService(this,sid){m->runOnUiThread{status.text=m}}; bridge?.start(); stage1()
     }
@@ -107,24 +108,37 @@ class MainActivity : androidx.activity.ComponentActivity() {
     private fun loadApps(){
         apps=packageManager.getInstalledApplications(PackageManager.ApplicationInfoFlags.of(0)).filter{it.packageName!=packageName}.sortedBy{packageManager.getApplicationLabel(it).toString().lowercase()}
         targetSpinner.adapter=ArrayAdapter(this,android.R.layout.simple_spinner_dropdown_item,apps.map{"${packageManager.getApplicationLabel(it)}\n${it.packageName}"})
-        val saved=prefs().getString(TARGET,"")?:"";val idx=apps.indexOfFirst{it.packageName==saved};if(idx>=0)targetSpinner.setSelection(idx)
+        val saved=prefs().getString(TARGET,"")?:"";val idx=apps.indexOfFirst{it.packageName==saved};if(idx>=0){target=saved;targetSpinner.setSelection(idx)}
     }
     private fun openAccessibility(){startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))}
 
+    /** Stage 2 proves only the device control channel. Target binding belongs to Stage 3. */
     private fun connectMobile(){
         if(!begin(2))return
         if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service is not enabled");openAccessibility();return}
-        UniversalAccessibilityService.targetPackage=target
-        val ok=bridge?.connect(target)==true
-        if(!ok){fail(2,"Real controller handshake failed; device is not connected");return}
-        if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service dropped during connection");return}
-        pass(2,"REAL DEVICE CONTROL CHANNEL VERIFIED: handshake + PING/PONG + Accessibility ready")
+        val ok=bridge?.connect("")==true
+        if(!ok){fail(2,"Real controller handshake failed; accessibility service is not actually bound");return}
+        if(!UniversalAccessibilityService.isEnabled || UniversalAccessibilityService.instance==null){fail(2,"Accessibility binding disappeared during connection");return}
+        pass(2,"REAL DEVICE CONTROL CHANNEL VERIFIED: bound AccessibilityService + controller handshake")
     }
+
+    /** Stage 3 proves the selected app is installed, launchable, and bound to the real controller. */
     private fun selectTarget(){
         if(!begin(3))return
-        val pos=targetSpinner.selectedItemPosition;if(pos !in apps.indices){fail(3,"No target selected");return}
-        target=apps[pos].packageName;prefs().edit().putString(TARGET,target).apply();UniversalAccessibilityService.targetPackage=target
-        pass(3,"Target package selected: $target")
+        val pos=targetSpinner.selectedItemPosition;if(pos !in apps.indices){fail(3,"No installed target application selected");return}
+        val selected=apps[pos].packageName
+        val installed=try{packageManager.getApplicationInfo(selected,0)}catch(_:Exception){null}
+        if(installed==null){fail(3,"Selected target disappeared from installed-app list");return}
+        val launchable=packageManager.getLaunchIntentForPackage(selected)!=null
+        if(!launchable){fail(3,"Selected target has no launchable activity");return}
+        target=selected
+        prefs().edit().putString(TARGET,target).apply()
+        UniversalAccessibilityService.targetPackage=target
+        val bound=UniversalAccessibilityService.isEnabled && UniversalAccessibilityService.instance!=null
+        if(!bound){fail(3,"Target selected but AccessibilityService is not currently bound");return}
+        val connected=bridge?.connect(target)==true
+        if(!connected){fail(3,"Target selected but real controller target handshake failed");return}
+        pass(3,"REAL TARGET SELECTION VERIFIED: installed + launchable + controller bound • $target")
     }
     private fun studyTarget(){
         if(!begin(4))return
@@ -137,20 +151,29 @@ class MainActivity : androidx.activity.ComponentActivity() {
         prefs().edit().putString(STORY,s).apply();pass(5,"Story persisted (${s.length} chars)")
     }
 
-    /** 6 is deliberately the first target-app operation stage after story input. */
+    /** Stage 6 performs the first real target operation without blocking the UI thread. */
     private fun operateTarget(){
         if(!begin(6))return
+        if(target.isBlank()){fail(6,"No verified target package is selected");return}
         val i=packageManager.getLaunchIntentForPackage(target);if(i==null){fail(6,"Target cannot be launched");return}
+        if(!UniversalAccessibilityService.isEnabled || UniversalAccessibilityService.instance==null){fail(6,"Accessibility controller is not bound");return}
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP);UniversalAccessibilityService.targetPackage=target;startActivity(i)
-        val deadline=System.currentTimeMillis()+5000
-        while(System.currentTimeMillis()<deadline && !UniversalAccessibilityService.targetForeground){Thread.sleep(150)}
-        val root=UniversalAccessibilityService.instance?.rootInActiveWindow
-        if(!UniversalAccessibilityService.targetForeground || root==null){root?.recycle();fail(6,"Target launch did not produce a live foreground accessibility channel");return}
-        var nodes=0
-        fun probe(n:AccessibilityNodeInfo?){if(n==null)return;nodes++;for(k in 0 until n.childCount)probe(n.getChild(k))}
-        probe(root);root.recycle()
-        if(nodes<1){fail(6,"Target foreground but accessibility tree is empty");return}
-        pass(6,"REAL TARGET OPERATION VERIFIED: foreground + live accessibility tree nodes=$nodes")
+        waitForTargetForeground(System.currentTimeMillis()+5000)
+    }
+    private fun waitForTargetForeground(deadline:Long){
+        if(isFinishing)return
+        if(UniversalAccessibilityService.targetForeground){
+            val root=UniversalAccessibilityService.instance?.rootInActiveWindow
+            if(root==null){fail(6,"Target foreground reported but live accessibility root is unavailable");return}
+            var nodes=0
+            fun probe(n:AccessibilityNodeInfo?){if(n==null)return;nodes++;for(k in 0 until n.childCount)probe(n.getChild(k))}
+            probe(root);root.recycle()
+            if(nodes<1){fail(6,"Target foreground but accessibility tree is empty");return}
+            pass(6,"REAL TARGET OPERATION VERIFIED: foreground + live accessibility tree nodes=$nodes")
+            return
+        }
+        if(System.currentTimeMillis()>=deadline){fail(6,"Target launch did not produce a live foreground accessibility channel within 5s");return}
+        android.os.Handler(mainLooper).postDelayed({waitForTargetForeground(deadline)},150)
     }
 
     /** 7 collects actual accessibility-tree evidence, not only a package-name check. */
