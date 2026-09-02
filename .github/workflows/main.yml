@@ -176,6 +176,11 @@ jobs:
     steps:
       - name: Checkout exact production commit
         uses: actions/checkout@v4
+      - name: Download exact verified APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-APK
+          path: release
       - name: Validate real-device release evidence
         shell: bash
         env:
@@ -203,6 +208,10 @@ assert o.get("stage_count") == 13
 assert o.get("real_device") is True
 assert o.get("evidence_complete") is True
 assert o.get("commit_sha") == "${{ github.sha }}"
+stages=o.get("stages")
+assert isinstance(stages,list) and len(stages)==13
+assert [x.get("stage") for x in stages] == list(range(1,14))
+assert all(x.get("result") == "PASS" and x.get("evidence") for x in stages)
 print("REAL_DEVICE_EVIDENCE=VALID")
 PY
           fi
@@ -214,11 +223,14 @@ PY
         shell: bash
         run: |
           set -euo pipefail
+          test -s release/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s release/KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          test -s release/APK_SHA256.txt
           TAG="verified-apk-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
-            KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
-            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
-            APK_SHA256.txt \
+            release/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
+            release/KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
+            release/APK_SHA256.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Verified APK ${GITHUB_RUN_NUMBER}" \
