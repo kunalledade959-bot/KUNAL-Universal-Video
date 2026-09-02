@@ -11,6 +11,7 @@ import java.util.UUID
  *
  * Invariants:
  * - only the unlocked stage can run;
+ * - a committed PASS cannot be rerun without an explicit repair reset;
  * - PASS requires non-empty evidence and a valid run transition;
  * - repairing an upstream stage invalidates every downstream result;
  * - process death can never turn RUNNING into PASS;
@@ -61,7 +62,8 @@ class StageGate(context: Context) {
     @Synchronized fun begin(id: Int): Boolean {
         if (!isUnlocked(id)) return false
         val s = stages[id - 1]
-        if (s.state == State.RUNNING) return false
+        // A PASS is a committed fact. It may only be invalidated through repair.
+        if (s.state == State.PASS || s.state == State.RUNNING) return false
         s.state = State.RUNNING
         s.startedAt = System.currentTimeMillis()
         s.finishedAt = 0L
@@ -95,10 +97,7 @@ class StageGate(context: Context) {
         persist()
     }
 
-    /**
-     * Reset for repair and invalidate every dependent result. This is deliberately
-     * stronger than the old implementation: no stale downstream PASS survives repair.
-     */
+    /** Reset for repair and invalidate every dependent result. */
     @Synchronized fun resetForRepair(id: Int): Boolean {
         if (!valid(id)) return false
         if (id > 1 && stages[id - 2].state != State.PASS) return false
@@ -212,7 +211,6 @@ class StageGate(context: Context) {
                 stages[i].finishedAt = o.optLong("finished_at", 0L)
             }
 
-            // Rebuild the sequential invariant. No stage may remain PASS after a broken predecessor.
             var predecessorPass = true
             for (i in 0 until 13) {
                 val s = stages[i]
