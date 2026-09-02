@@ -4,6 +4,13 @@ name: Build KUNAL Universal Video APK
 
 on:
   workflow_dispatch:
+    inputs:
+      release_after_real_device:
+        description: "Release only after real-device evidence has been committed"
+        required: true
+        default: "false"
+        type: choice
+        options: ["false", "true"]
   push:
     paths:
       - "*.zip"
@@ -162,17 +169,46 @@ jobs:
             adb-devices.txt
           if-no-files-found: ignore
 
-  publish-verified-release:
+  release-gate:
     needs: emulator-smoke-test
     if: needs.emulator-smoke-test.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - name: Download verified APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: KUNAL-Universal-Video-APK
-          path: release
-      - name: Publish immutable verified APK release
+      - name: Checkout exact production commit
+        uses: actions/checkout@v4
+      - name: Validate real-device release evidence
+        shell: bash
+        env:
+          RELEASE_APPROVAL: ${{ inputs.release_after_real_device || 'false' }}
+        run: |
+          set -uo pipefail
+          rc=0
+          echo "RELEASE_APPROVAL=$RELEASE_APPROVAL"
+          if [[ "$RELEASE_APPROVAL" != "true" ]]; then
+            echo "REAL_DEVICE_RELEASE_GATE=NOT_APPROVED"
+            echo "Reason: build/emulator evidence cannot substitute for physical-device evidence."
+            exit 0
+          fi
+          if [[ ! -s real_device_release_evidence.json ]]; then
+            echo "ERROR: real_device_release_evidence.json is missing"
+            rc=1
+          else
+            python3 - <<'PY' || rc=1
+import json
+from pathlib import Path
+o=json.loads(Path("real_device_release_evidence.json").read_text(encoding="utf-8"))
+assert o.get("schema") == 1
+assert o.get("verified") is True
+assert o.get("stage_count") == 13
+assert o.get("real_device") is True
+assert o.get("evidence_complete") is True
+assert o.get("commit_sha") == "${{ github.sha }}"
+print("REAL_DEVICE_EVIDENCE=VALID")
+PY
+          fi
+          exit "$rc"
+      - name: Release only with real-device evidence
+        if: inputs.release_after_real_device == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
@@ -180,10 +216,10 @@ jobs:
           set -euo pipefail
           TAG="verified-apk-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" \
-            release/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
-            release/KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
-            release/APK_SHA256.txt \
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk \
+            KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json \
+            APK_SHA256.txt \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Verified APK ${GITHUB_RUN_NUMBER}" \
-            --notes "Production APK verified by build + Android emulator smoke test. Commit: ${GITHUB_SHA}. The APK SHA-256 is stored in APK_SHA256.txt."
+            --notes "Release allowed only after build, emulator, 13-stage independent verification, and real-device evidence. Commit: ${GITHUB_SHA}."
