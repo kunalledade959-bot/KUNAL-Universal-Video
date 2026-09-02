@@ -2,6 +2,7 @@
   "schema": 1,
   "app_id": "com.kunal.universalvideo",
   "stage_count": 13,
+  "runtime_fix_commit": "ccd90358fef0fb6a81988a94444b9baf40447e87",
   "stages": [
     {"id":1,"name":"Startup / Self-Diagnostic","button":"1 • START / DIAGNOSTIC"},
     {"id":2,"name":"Mobile Connection / Permissions","button":"2 • ENABLE ACCESSIBILITY / CONNECT"},
