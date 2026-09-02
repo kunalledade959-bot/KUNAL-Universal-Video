@@ -1,8 +1,7 @@
 {
-  "schema": 1,
+  "schema": 2,
   "app_id": "com.kunal.universalvideo",
   "stage_count": 13,
-  "runtime_fix_commit": "ccd90358fef0fb6a81988a94444b9baf40447e87",
   "stages": [
     {"id":1,"name":"Startup / Self-Diagnostic","button":"1 • START / DIAGNOSTIC"},
     {"id":2,"name":"Mobile Connection / Permissions","button":"2 • ENABLE ACCESSIBILITY / CONNECT"},
@@ -18,6 +17,47 @@
     {"id":12,"name":"Verify / Auto-Fix","button":"12 • VERIFY / AUTO-FIX"},
     {"id":13,"name":"Final Gallery Export","button":"13 • FINAL GALLERY EXPORT"}
   ],
+  "vocabulary": {
+    "APP_NAME": "Kunal Universal Video",
+    "STATUS_MESSAGES": {
+      "LOCKED": "LOCKED",
+      "READY": "READY",
+      "RUNNING": "RUNNING",
+      "PASS": "PASS",
+      "FAIL": "FAIL",
+      "UNKNOWN": "UNKNOWN"
+    },
+    "ERROR_MESSAGES": {
+      "MISSING_EVIDENCE": "Required evidence is missing",
+      "INVALID_EVIDENCE": "Required evidence is invalid",
+      "PROCESS_RECOVERY": "Stage was RUNNING when the previous process ended",
+      "ACCESSIBILITY_DISABLED": "Accessibility service is not enabled",
+      "ACCESSIBILITY_UNBOUND": "Accessibility service is not actually bound",
+      "BRIDGE_HANDSHAKE_FAILED": "Real controller handshake failed",
+      "TARGET_NOT_SELECTED": "No verified target package is selected",
+      "TARGET_NOT_LAUNCHABLE": "Target cannot be launched",
+      "STORY_MISSING": "Story missing",
+      "AUDIO_MISSING": "Generated narration audio missing",
+      "RECORDING_MISSING": "No recorded visual clip found",
+      "ASSEMBLY_FAILED": "Assembly failed",
+      "EXPORT_FAILED": "Final Gallery export failed"
+    },
+    "SCENE_FIELDS": ["SCENE", "ACTION", "BACKGROUND", "CHARACTER", "CLIP"],
+    "AUDIO_LABELS": ["VOICE", "MUSIC", "SFX", "NARRATION"],
+    "EXPORT_METADATA": ["DISPLAY_NAME", "MIME_TYPE", "RELATIVE_PATH", "IS_PENDING", "FINAL_URI"],
+    "PROMPT_FIELDS": ["VISUAL_PROMPT", "ACTION_PROMPT"],
+    "MATERIAL_RULES": [
+      "No empty canonical value",
+      "No duplicate stage id",
+      "No duplicate stage name",
+      "No duplicate button label",
+      "No placeholder token",
+      "No silent scene truncation",
+      "No generic prompt replacement",
+      "No PASS without evidence",
+      "No downstream PASS after upstream repair or failure"
+    ]
+  },
   "pass_rule": "A stage is PASS only after real runtime observation produces non-empty, schema-valid, hash-valid evidence for its current run. Downstream PASS states are invalidated whenever an upstream stage is repaired or fails.",
-  "release_rule": "Release only after the same production implementation passes build verification, independent stages 01-13, real-device verification, adversarial recovery tests, and final evidence audit."
+  "release_rule": "Release only after the same production implementation passes build verification, independent stages 01-13, real-device verification, adversarial recovery tests, and final evidence audit. Static or emulator-only PASS is never sufficient for real-device release truth."
 }
