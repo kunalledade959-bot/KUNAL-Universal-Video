@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Fail-closed static audit for the canonical 13-stage production contract.
+"""Complete static audit for the canonical 13-stage production contract.
 
-This audit intentionally does not claim runtime PASS. It verifies that the source
-contains the canonical stage surface and that known unsafe shortcuts are visible
-for engineering remediation instead of silently becoming release evidence.
+The audit collects every finding, prints the complete report, and only then
+returns non-zero. Static PASS is never promoted to runtime/device PASS.
 """
 from __future__ import annotations
 
@@ -17,69 +16,100 @@ ACTIVITY = ROOT / "activity_fixed.kt"
 GATE = ROOT / "stage_gate.kt"
 
 errors: list[str] = []
-blockers: list[str] = []
+findings: list[str] = []
 
-if not CONTRACT.is_file():
-    errors.append("production_truth_contract.json missing")
-if not ACTIVITY.is_file():
-    errors.append("activity_fixed.kt missing")
-if not GATE.is_file():
-    errors.append("stage_gate.kt missing")
 
-if not errors:
+def error(msg: str) -> None:
+    errors.append(msg)
+
+
+def values_of(group):
+    if isinstance(group, dict):
+        return list(group.values())
+    if isinstance(group, list):
+        return group
+    if isinstance(group, str):
+        return [group]
+    return []
+
+try:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
-    activity = ACTIVITY.read_text(encoding="utf-8")
-    gate = GATE.read_text(encoding="utf-8")
+except Exception as exc:
+    contract = {}
+    error(f"contract parse failed: {type(exc).__name__}: {exc}")
 
-    if contract.get("stage_count") != 13:
-        errors.append("contract stage_count is not 13")
+activity = ACTIVITY.read_text(encoding="utf-8") if ACTIVITY.is_file() else ""
+gate = GATE.read_text(encoding="utf-8") if GATE.is_file() else ""
+if not ACTIVITY.is_file(): error("activity_fixed.kt missing")
+if not GATE.is_file(): error("stage_gate.kt missing")
 
-    stages = contract.get("stages", [])
-    if len(stages) != 13 or [x.get("id") for x in stages] != list(range(1, 14)):
-        errors.append("contract stage IDs are not exactly 1..13")
+if contract.get("schema") != 2: error("contract schema must be 2")
+if contract.get("app_id") != "com.kunal.universalvideo": error("contract app_id mismatch")
+if contract.get("stage_count") != 13: error("contract stage_count is not 13")
+stages = contract.get("stages", [])
+if len(stages) != 13 or [x.get("id") for x in stages] != list(range(1,14)):
+    error("contract stage IDs are not exactly 1..13")
 
-    for s in stages:
-        button = s["button"]
-        if button not in activity:
-            errors.append(f"missing canonical button: {button}")
+names = [x.get("name", "") for x in stages]
+buttons = [x.get("button", "") for x in stages]
+if len(set(names)) != 13: error("duplicate stage names detected")
+if len(set(buttons)) != 13: error("duplicate button labels detected")
+for s in stages:
+    if not isinstance(s.get("name"), str) or not s["name"].strip(): error(f"stage {s.get('id')} has empty name")
+    if not isinstance(s.get("button"), str) or not s["button"].strip(): error(f"stage {s.get('id')} has empty button")
 
-    required_gate_symbols = [
-        "resetForRepair", "invalidateDownstream", "validEvidence", "commit()",
-        'put("sha256"', 'put("run_id"', 'State.RUNNING'
-    ]
-    for symbol in required_gate_symbols:
-        if symbol not in gate:
-            errors.append(f"StageGate missing truth-control symbol: {symbol}")
+vocab = contract.get("vocabulary", {})
+required_groups = {"APP_NAME", "STATUS_MESSAGES", "ERROR_MESSAGES", "SCENE_FIELDS", "AUDIO_LABELS", "EXPORT_METADATA", "PROMPT_FIELDS", "MATERIAL_RULES"}
+missing_groups = sorted(required_groups - set(vocab))
+for g in missing_groups: error(f"missing vocabulary group: {g}")
+for group_name, group in vocab.items():
+    vals = values_of(group)
+    if not vals: error(f"empty vocabulary group: {group_name}")
+    for value in vals:
+        if not isinstance(value, str) or not value.strip():
+            error(f"empty vocabulary value in {group_name}")
+        if any(token in value.upper() for token in ("TODO", "FIXME", "PLACEHOLDER")):
+            error(f"placeholder vocabulary value in {group_name}: {value!r}")
 
-    # These are hard blockers until the production implementation replaces them.
-    known_shortcuts = {
-        "silent_scene_truncation": r"\.take\(30\)",
-        "generic_prompt_replacement": r"VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character",
-        "fixed_recording_wait": r"postDelayed\(\{.*?latestRecording\(\).*?\},1500\)",
-        "unbounded_tree_walk": r"for\(\w+ in 0 until n\.childCount\)probe\(n\.getChild",
-        "unbounded_deep_walk": r"for\(i in 0 until n\.childCount\)walk\(n\.getChild",
-        "non_durable_story_write": r"putString\(STORY,s\)\.apply\(\)",
-    }
-    for name, pattern in known_shortcuts.items():
-        if re.search(pattern, activity, re.DOTALL):
-            blockers.append(name)
+# The generated authority must be present and must own all 13 stage labels.
+if "object ProductionTruth" not in activity: error("ProductionTruth authority missing from APK source")
+if activity.count("ProductionTruth.button(") != 13: error("APK UI does not contain exactly 13 registry-bound button references")
+if "ProductionTruth.stageNames" not in gate: error("StageGate is not bound to ProductionTruth.stageNames")
+if "DO NOT EDIT MANUALLY" not in activity: error("generated authority marker missing")
 
-    # Plain PASS calls are allowed only through the gate, but a runtime evidence
-    # message must not be mistaken for artifact proof by this static audit.
-    if '"final_pass"' not in gate:
-        errors.append("StageGate does not expose final_pass")
+# Truth-control invariants.
+for symbol in ("resetForRepair", "invalidateDownstream", "validEvidence", "commit()", 'put("sha256"', 'put("run_id"', "State.RUNNING"):
+    if symbol not in gate: error(f"StageGate missing truth-control symbol: {symbol}")
+if '"final_pass"' not in gate: error("StageGate does not expose final_pass")
+
+# Known unsafe shortcuts are hard failures. The report still collects all of them.
+shortcuts = {
+    "silent_scene_truncation": r"\.take\(30\)",
+    "generic_prompt_replacement": r"VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character",
+    "fixed_recording_wait": r"postDelayed\(\{.*?latestRecording\(\).*?\},1500\)",
+    "unbounded_tree_walk": r"for\(\w+ in 0 until n\.childCount\)probe\(n\.getChild",
+    "unbounded_deep_walk": r"for\(i in 0 until n\.childCount\)walk\(n\.getChild",
+    "non_durable_story_write": r"putString\(STORY,s\)\.apply\(\)",
+}
+for name, pattern in shortcuts.items():
+    if re.search(pattern, activity, re.DOTALL):
+        findings.append(name)
+        error(f"unsafe shortcut present: {name}")
+
+# Explicitly reject a fake evidence path that can mark PASS without the gate.
+for match in re.finditer(r"state\s*=\s*StageGate\.State\.PASS", activity):
+    error(f"direct PASS state mutation at source offset {match.start()}")
 
 report = {
     "contract": str(CONTRACT.relative_to(ROOT)),
+    "authority": "ProductionTruth",
     "errors": errors,
-    "known_runtime_blockers": blockers,
+    "unsafe_shortcuts": findings,
     "static_contract_pass": not errors,
+    "runtime_pass": False,
+    "real_device_pass": False,
     "release_pass": False,
-    "note": "Static contract PASS is not runtime PASS. Known blockers must be removed and 13 independent E2E + real-device evidence must pass before release."
+    "note": "Static PASS is not runtime PASS. Real-device evidence is mandatory before release."
 }
 print(json.dumps(report, indent=2, ensure_ascii=False))
-
-# Contract structure errors are hard failures. Known runtime blockers are emitted
-# as explicit evidence but do not terminate this inventory job, so independent
-# remediation/testing can continue in later CI jobs.
 raise SystemExit(1 if errors else 0)
