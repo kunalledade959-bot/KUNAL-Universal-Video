@@ -38,7 +38,6 @@ a = a.replace("/** Production 1..13 workflow controller.", "/** MOBILE_HARDEN_V2
 activity.write_text(a, encoding="utf-8")
 
 s = repair.read_text(encoding="utf-8")
-# Locate connect() by signature and preserve the following disconnect() function.
 bridge_pat = re.compile(r"(?ms)(^\s*fun\s+connect\s*\(\s*t\s*:\s*String\s*\)\s*(?::\s*Boolean)?\s*\{).*?(^\s*fun\s+disconnect\s*\()")
 bridge_new = ''' fun connect(t:String):Boolean{
   if(!UniversalAccessibilityService.isEnabled || UniversalAccessibilityService.instance==null){connected.set(false);cb("REAL CONNECT FAIL • AccessibilityService not actually bound");return false}
@@ -46,14 +45,16 @@ bridge_new = ''' fun connect(t:String):Boolean{
   return try{
    val h=(java.net.URL("http://127.0.0.1:$PORT/health").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="GET"}
    val hb=h.inputStream.bufferedReader().use{it.readText()};h.disconnect();val hj=JSONObject(hb)
-   if(!hj.optBoolean("ok")||hj.optString("protocol")!=ControllerProtocol.PROTOCOL){connected.set(false);return false}
+   if(!hj.optBoolean("ok")||hj.optString("protocol")!=ControllerProtocol.PROTOCOL||hj.optString("session_id")!=sessionId){connected.set(false);return false}
    val p=(java.net.URL("http://127.0.0.1:$PORT/status").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="GET"}
    val pb=p.inputStream.bufferedReader().use{it.readText()};p.disconnect();val pj=JSONObject(pb)
-   if(!pj.optBoolean("ok")||!pj.optBoolean("accessibility")||!pj.optBoolean("service_bound")){connected.set(false);return false}
-   val ping=(java.net.URL("http://127.0.0.1:$PORT").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="GET"}
-   ping.disconnect()
-   connected.set(true);cb("REAL DEVICE CONTROL CHANNEL CONNECTED");true
-  }catch(_:Exception){connected.set(false);cb("REAL CONNECT FAIL • controller health/status verification failed");false}
+   if(!pj.optBoolean("ok")||!pj.optBoolean("accessibility")||!pj.optBoolean("service_bound")||pj.optString("session_id")!=sessionId){connected.set(false);return false}
+   val ping=(java.net.URL("http://127.0.0.1:$PORT").openConnection() as java.net.HttpURLConnection).apply{connectTimeout=700;readTimeout=1000;requestMethod="POST";doOutput=true;setRequestProperty("Content-Type","application/json")}
+   ping.outputStream.use{it.write(JSONObject(mapOf("command" to ControllerProtocol.PING,"session_id" to sessionId,"target_package" to target)).toString().toByteArray(Charsets.UTF_8))}
+   val pong=ping.inputStream.bufferedReader().use{it.readText()};ping.disconnect();val pj2=JSONObject(pong)
+   if(!pj2.optBoolean("ok")||pj2.optString("command")!="PONG"||pj2.optString("session_id")!=sessionId){connected.set(false);return false}
+   connected.set(true);cb("REAL DEVICE CONTROL CHANNEL CONNECTED • HEALTH + STATUS + PING/PONG");true
+  }catch(_:Exception){connected.set(false);cb("REAL CONNECT FAIL • controller handshake verification failed");false}
  }
 '''
 s2, n = bridge_pat.subn(bridge_new + r'\2', s, count=1)
