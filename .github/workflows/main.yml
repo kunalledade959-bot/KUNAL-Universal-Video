@@ -8,6 +8,10 @@ on:
     paths:
       - "*.zip"
       - "activity_fixed.kt"
+      - "stage_gate.kt"
+      - "production_truth_contract.json"
+      - ".github/scripts/production_truth_patch.py"
+      - ".github/scripts/production_truth_audit.py"
       - "pro_repair_v3.py"
       - "mobile_connection_real_fix.py"
       - "progressive_stage_ui_patch.py"
@@ -58,6 +62,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 progressive_stage_ui_patch.py
+      - name: Apply production truth hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/production_truth_patch.py
+          python3 .github/scripts/production_truth_audit.py | tee production-truth-audit.json
       - name: Verify progressive UI source
         shell: bash
         run: |
@@ -86,6 +96,7 @@ jobs:
             KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
             KUNAL_UNIVERSAL_VIDEO_PRO_V3_BUILD.log
             APK_SHA256.txt
+            production-truth-audit.json
           if-no-files-found: error
 
   emulator-smoke-test:
