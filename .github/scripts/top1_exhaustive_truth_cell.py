@@ -134,7 +134,7 @@ def repair_activity() -> bool:
 
 
 def kotlin_braces_balanced(text: str) -> tuple[bool, str]:
-    """Count structural Kotlin braces while ignoring comments and quoted strings."""
+    """Count structural Kotlin braces while ignoring comments, strings and char literals."""
     depth = 0
     i = 0
     n = len(text)
@@ -148,6 +148,7 @@ def kotlin_braces_balanced(text: str) -> tuple[bool, str]:
             if c == '"':
                 if i + 2 < n and text[i:i+3] == '"""': state = "triple"; i += 3; continue
                 state = "string"; i += 1; continue
+            if c == "'": state = "char"; i += 1; continue
             if c == '{': depth += 1
             elif c == '}':
                 depth -= 1
@@ -165,6 +166,11 @@ def kotlin_braces_balanced(text: str) -> tuple[bool, str]:
         if state == "string":
             if c == '\\': i += 2; continue
             if c == '"': state = "code"
+            i += 1
+            continue
+        if state == "char":
+            if c == '\\': i += 2; continue
+            if c == "'": state = "code"
             i += 1
             continue
         if state == "triple":
