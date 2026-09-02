@@ -28,38 +28,39 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Record authoritative engineering baseline
+      - name: Record engineering baseline
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p doctor-evidence
           cat > doctor-evidence/QUALITY_BASELINE.md <<'EOF'
-          # KUNAL Universal Video - Top-Tier Engineering Baseline
-          1. Prefer a layered testing strategy: unit/component tests are the high-volume base; feature/application/release-candidate tests provide increasing production fidelity.
-          2. Real-device testing is mandatory before release. Emulators complement, not replace, hardware validation.
-          3. Use instrumented/UI/E2E tests for Android framework behavior that JVM tests cannot prove.
-          4. Use malformed-input/fuzz testing for security-sensitive and parser/media boundaries.
-          5. Use performance instrumentation/StrictMode and real-device benchmarks for performance claims.
-          6. Use screenshot/UI regression tests for critical visual surfaces where appropriate.
-          7. Never accept source-pattern presence as runtime proof.
-          8. Never turn warnings, skipped tests, unavailable dependencies, or infrastructure failures into PASS.
-          9. For every repair, preserve working behavior and prove the repaired behavior with the narrowest relevant test plus full regression.
-          10. Prefer official Android/Jetpack-supported mechanisms unless a stronger, verified alternative is demonstrated.
-          11. Before replacing a dependency/API, compare correctness, lifecycle behavior, compatibility, maintenance, performance, security, and testability.
-          12. A production claim requires evidence, not confidence.
+          # KUNAL Universal Video - Verification Contract
+          - Evidence beats source-pattern presence.
+          - Unit/component tests are the high-volume base; feature/application/release tests add production fidelity.
+          - Emulator tests complement real-device validation and never replace it.
+          - Android framework behavior requires instrumented/device tests.
+          - Parser/media/security boundaries require malformed-input and fuzz coverage.
+          - Performance claims require instrumentation and, where hardware matters, physical-device evidence.
+          - Warnings, skips, unavailable dependencies, and infrastructure failures are never PASS.
+          - A repair is promoted only after its narrow test and full regression both pass.
+          - The 13-stage gate remains fail-closed and persisted evidence must remain durable.
+          - Never weaken an assertion to make CI green.
           EOF
 
-      - name: Research current Android quality guidance
+      - name: Research current Android guidance
+        continue-on-error: true
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           mkdir -p doctor-evidence/research
-          curl -fsSL --max-time 20 https://developer.android.com/training/testing/fundamentals/strategies -o doctor-evidence/research/android-testing-strategies.html
-          curl -fsSL --max-time 20 https://developer.android.com/studio/run/device -o doctor-evidence/research/android-real-device.html
-          curl -fsSL --max-time 20 https://developer.android.com/develop/adaptive-apps/quality-guidelines/core-app-quality -o doctor-evidence/research/android-quality.html
-          curl -fsSL --max-time 20 https://source.android.com/docs/security/best-practices/app -o doctor-evidence/research/android-security.html
+          curl -fsSL --max-time 20 https://developer.android.com/training/testing/fundamentals/strategies -o doctor-evidence/research/testing-strategies.html
+          curl -fsSL --max-time 20 https://developer.android.com/studio/run/device -o doctor-evidence/research/real-device.html
+          curl -fsSL --max-time 20 https://developer.android.com/develop/adaptive-apps/quality-guidelines/core-app-quality -o doctor-evidence/research/core-quality.html
+          curl -fsSL --max-time 20 https://source.android.com/docs/security/best-practices/app -o doctor-evidence/research/security.html
 
       - name: Static exhaustive audit
+        id: static
+        continue-on-error: true
         shell: bash
         run: |
           set +e
@@ -73,31 +74,35 @@ jobs:
           cp FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt doctor-evidence/static-audit.txt 2>/dev/null || true
           cp FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt doctor-evidence/static-errors.txt 2>/dev/null || true
           echo "static_audit_rc=$rc" >> doctor-evidence/static-audit.txt
-          exit 0
+          exit "$rc"
 
       - name: Install Copilot CLI
         run: npm install -g @github/copilot
 
       - name: Autonomous diagnosis and repair
+        id: repair
+        continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          set -euo pipefail
+          set +e
           copilot --autopilot --yolo --max-autopilot-continues 12 -p '
-          You are the overnight senior Android architect and repair engineer for KUNAL Universal Video.
-          GOAL: continuously improve the existing product toward production-grade quality without breaking working behavior. Work from evidence, never from guesses.
-          FIRST: read the entire repository relevant to the Android app, the 13-stage contracts, all audit reports in doctor-evidence, the current packaged Android project, and QUALITY_BASELINE.md. Inspect every relevant small component, not only large files.
-          RESEARCH: use the downloaded official Android guidance in doctor-evidence/research as the baseline. When choosing among implementations, compare the strongest available options for correctness, Android compatibility, lifecycle safety, performance, security, maintenance, testability, and production maturity. Prefer official Android/Jetpack APIs where objectively strongest. Do not blindly replace a working implementation just because another library exists.
-          ROOT-CAUSE RULE: identify the first real defect. Distinguish app defects from CI/emulator/infrastructure limitations. Never hide a failure, skip a test, weaken an assertion, or manufacture PASS.
-          REPAIR RULE: make only evidence-backed source/project repairs. Preserve package com.kunal.universalvideo, the 13-stage architecture, working features, and the real mobile/controller/video-generation intent. Do not replace the project with a toy implementation. Do not edit .github/workflows files. Do not modify secrets or credentials.
-          MICRO-COMPONENT RULE: inspect constants, strings, APIs, permissions, dependencies, timeouts, retries, parsers, serializers, fallbacks, media codecs, lifecycle callbacks, error handling, persistence, and cleanup paths. If a component has alternatives, record why the selected one is stronger.
-          VERIFICATION RULE: after every repair, run the narrowest relevant test first, then build, then emulator/runtime verification. For deterministic invariants, stress-test 10000 iterations where practical. Exercise boundary, empty, Unicode, malformed, timeout, cancellation, restart, process-death, and recovery cases where applicable.
-          FAIL-CONTINUE RULE: if one test fails, preserve exact evidence and continue independent diagnostics. Do not stop the whole engineering pass just because one cell failed.
-          RELEASE RULE: never publish a repaired APK or commit a project repair as verified unless the relevant build/runtime gate actually passes. A static PASS is not a device PASS. An emulator PASS is not a physical-device PASS.
-          AUTO-COMMIT RULE: only commit project changes after the real available verification gates pass. Never commit a workflow change from this job. If no proven defect exists, make no speculative change.
-          At the end write doctor-evidence/DOCTOR_REPORT.md containing exact findings, files inspected, alternatives considered, repairs made, tests executed, iteration counts, remaining blockers, and a strict verdict of VERIFIED / NOT_VERIFIED.
+          You are the senior Android architect and repair engineer for KUNAL Universal Video.
+          Work evidence-first. Inspect the whole repository relevant to the product, the 13-stage contracts, doctor-evidence, Android source, build scripts, tests, permissions, lifecycle paths, persistence, media pipeline, controller bridge, and CI diagnostics.
+          The objective is production correctness, not merely a green source scan.
+          Identify root causes and distinguish app defects from CI/emulator/infrastructure defects.
+          Repair only evidence-backed defects. Preserve package com.kunal.universalvideo, the 13-stage architecture, working behavior, and the real mobile/controller/video-generation intent.
+          Never edit .github/workflows, secrets, or credentials. Never weaken assertions, skip tests, manufacture evidence, or turn infrastructure failures into PASS.
+          For Stage 2 prove a real controller/session handshake. For Stage 3 prove installed and launchable target selection. For Stage 6/7 prove live foreground target plus actual AccessibilityNodeInfo evidence. For Stage 10 prove actual audio and recording lifecycle. For Stage 11 validate media tracks and container metadata, not file size alone. For Stage 12 repair only known recoverable media faults and re-verify from scratch. For Stage 13 verify final MediaStore export and integrity evidence.
+          Run the narrowest relevant tests after each repair, then build and runtime tests. Stress deterministic state/persistence/parsing/validation invariants up to 10000 iterations where practical. Exercise empty, Unicode, malformed, timeout, cancellation, restart, process-death, and recovery cases.
+          If one test fails, preserve evidence and continue independent diagnostics rather than abandoning the engineering pass.
+          Do not claim physical-device verification from an emulator. Do not publish or commit a project repair unless all available relevant verification gates pass.
+          Write doctor-evidence/DOCTOR_REPORT.md with inspected files, root causes, alternatives considered, repairs, exact tests and iteration counts, blockers, and a strict VERIFIED or NOT_VERIFIED verdict.
           '
+          rc=$?
+          echo "copilot_rc=$rc" | tee doctor-evidence/copilot-status.txt
+          exit "$rc"
 
       - name: Rebuild and emulator gate
         id: gate
@@ -125,7 +130,7 @@ jobs:
             export PROJECT_DIR
             bash "$GITHUB_WORKSPACE/.github/scripts/runtime-diagnostic.sh"
 
-      - name: Enforce no workflow self-edit and collect diff
+      - name: Enforce fail-closed verdict and collect diff
         if: always()
         shell: bash
         run: |
@@ -136,14 +141,17 @@ jobs:
             echo 'FORBIDDEN_WORKFLOW_CHANGE' | tee doctor-evidence/VERDICT.txt
             exit 1
           fi
-          if [[ "${{ steps.gate.outcome }}" == "success" ]]; then
-            echo 'RUNTIME_GATE=PASS' | tee -a doctor-evidence/VERDICT.txt
+          echo "STATIC_AUDIT=${{ steps.static.outcome }}" | tee doctor-evidence/VERDICT.txt
+          echo "REPAIR=${{ steps.repair.outcome }}" | tee -a doctor-evidence/VERDICT.txt
+          echo "RUNTIME_GATE=${{ steps.gate.outcome }}" | tee -a doctor-evidence/VERDICT.txt
+          if [[ "${{ steps.gate.outcome }}" != "success" ]]; then
+            echo 'NOT_VERIFIED' | tee -a doctor-evidence/VERDICT.txt
           else
-            echo 'RUNTIME_GATE=FAIL_OR_UNPROVEN' | tee -a doctor-evidence/VERDICT.txt
+            echo 'RUNTIME_GATE_PASS' | tee -a doctor-evidence/VERDICT.txt
           fi
 
       - name: Commit only verified project repair
-        if: ${{ steps.gate.outcome == 'success' }}
+        if: ${{ steps.gate.outcome == 'success' && steps.repair.outcome == 'success' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -171,8 +179,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          echo 'Night Doctor completed. Evidence is authoritative.'
-          if [[ "${{ steps.gate.outcome }}" == "success" ]]; then
+          if [[ "${{ steps.gate.outcome }}" == "success" && "${{ steps.repair.outcome }}" == "success" ]]; then
             echo 'VERDICT=VERIFIED_RUNTIME_GATE'
           else
             echo 'VERDICT=NOT_VERIFIED'
