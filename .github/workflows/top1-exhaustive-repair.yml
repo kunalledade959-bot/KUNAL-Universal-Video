@@ -1,0 +1,180 @@
+name: Top1 Exhaustive Repair Loop
+
+on:
+  push:
+    paths:
+      - ".github/one-shot/top1-exhaustive-repair.trigger"
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-top1-exhaustive-repair
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1800
+    steps:
+      - name: Checkout exact repair baseline
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install repair intelligence
+        run: npm install -g @github/copilot
+
+      - name: Run exhaustive discovery without stopping
+        shell: bash
+        run: |
+          set +e
+          chmod +x .github/scripts/full-system-exhaustive-audit.sh
+          .github/scripts/full-system-exhaustive-audit.sh > exhaustive-discovery.log 2>&1
+          rc=$?
+          cat exhaustive-discovery.log
+          printf 'discovery_rc=%s\n' "$rc" > discovery-status.txt
+          exit 0
+
+      - name: Build ordered repair queue
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          src=Path('FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt')
+          lines=src.read_text(errors='replace').splitlines() if src.exists() else []
+          issues=[]
+          for line in lines:
+              if line.startswith('FAIL |') or line.startswith('WARN |'):
+                  issues.append(line)
+          # Stable de-duplication: the first occurrence defines priority.
+          seen=set(); ordered=[]
+          for x in issues:
+              if x not in seen:
+                  seen.add(x); ordered.append(x)
+          Path('repair-queue.txt').write_text('\n'.join(ordered)+'\n')
+          print(f'REPAIR_QUEUE_COUNT={len(ordered)}')
+          for i,x in enumerate(ordered,1): print(f'{i:03d} | {x}')
+          PY
+
+      - name: Sequential Top1 repair and independent verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          mkdir -p repair-evidence
+          touch repair-evidence/ROOT_CAUSE_REPORT.md
+          echo '# Top1 Exhaustive Repair Root-Cause Report' > repair-evidence/ROOT_CAUSE_REPORT.md
+          echo '' >> repair-evidence/ROOT_CAUSE_REPORT.md
+          echo 'Each issue is isolated. A failed repair does not stop the queue.' >> repair-evidence/ROOT_CAUSE_REPORT.md
+          echo '' >> repair-evidence/ROOT_CAUSE_REPORT.md
+
+          n=0
+          while IFS= read -r issue; do
+            [ -n "$issue" ] || continue
+            n=$((n+1))
+            id=$(printf '%03d' "$n")
+            echo "===== ISSUE $id ====="
+            echo "$issue"
+            git reset --hard HEAD >/dev/null 2>&1
+            git clean -fd >/dev/null 2>&1
+            before=$(git rev-parse HEAD)
+            printf '# Issue %s\n\n**Finding:** %s\n\n**Baseline:** `%s`\n\n' "$id" "$issue" "$before" > "repair-evidence/issue-$id.md"
+
+            copilot --autopilot --yolo --max-autopilot-continues 12 -p "
+            You are the highest-grade autonomous Android repair engineer operating on KUNAL Universal Video.
+            This is repair issue $id from a complete exhaustive audit.
+            EXACT AUDIT FINDING: $issue
+            Work only on the proven root cause represented by this finding. Inspect the actual repository, packaged Android project, source, contracts, and relevant tests before editing.
+            The objective is a production-grade replacement for the weak/problematic mechanism, not a cosmetic patch.
+            Never hide an error, weaken a gate, change a PASS criterion to make a test pass, pad/corrupt media, or create fake evidence.
+            Preserve all working functionality and the locked 13-stage behavior.
+            If the finding is CI-only, repair the CI mechanism only when it is in scope of this issue; otherwise record why no source change is justified.
+            Make the smallest robust architectural correction that eliminates the root cause and prevents recurrence.
+            Add or strengthen an independent verification for this exact issue where practical.
+            Do not stop merely because another unrelated issue exists. Do not edit unrelated components.
+            At the end, write a precise diagnosis and changed-file list to repair-evidence/ai-$id.md.
+            " > "repair-evidence/copilot-$id.log" 2>&1
+            repair_rc=$?
+
+            echo "COPILOT_RC=$repair_rc" >> "repair-evidence/issue-$id.md"
+            if [ "$repair_rc" -ne 0 ]; then
+              echo "Copilot failed for issue $id; collecting exact failure and continuing." | tee -a "repair-evidence/issue-$id.md"
+              printf '\n## Issue %s result\n- Finding: %s\n- Repair attempt: FAILED/INCOMPLETE (agent rc=%s)\n- Baseline preserved: %s\n\n' "$id" "$issue" "$repair_rc" "$before" >> repair-evidence/ROOT_CAUSE_REPORT.md
+              git reset --hard HEAD >/dev/null 2>&1
+              git clean -fd >/dev/null 2>&1
+              continue
+            fi
+
+            # Independent static verification. The repair agent never judges itself.
+            rm -f FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt
+            chmod +x .github/scripts/full-system-exhaustive-audit.sh
+            .github/scripts/full-system-exhaustive-audit.sh > "repair-evidence/verify-$id.log" 2>&1
+            verify_rc=$?
+            grep -E '^(FAIL|WARN) \|' FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt > "repair-evidence/verify-$id-findings.txt" 2>/dev/null || true
+            remaining=$(cat "repair-evidence/verify-$id-findings.txt" 2>/dev/null | wc -l)
+            echo "VERIFY_RC=$verify_rc" >> "repair-evidence/issue-$id.md"
+            echo "REMAINING_FINDINGS=$remaining" >> "repair-evidence/issue-$id.md"
+
+            # Commit only a repair that survives independent verification.
+            if [ "$verify_rc" -eq 0 ] && git diff --quiet; then
+              result="NO_CHANGE"
+            elif [ "$verify_rc" -eq 0 ]; then
+              git add -A
+              git commit -m "fix: top1 repair issue $id" >/dev/null 2>&1
+              commit_rc=$?
+              if [ "$commit_rc" -eq 0 ]; then
+                git push origin HEAD:main >/dev/null 2>&1
+                push_rc=$?
+                if [ "$push_rc" -eq 0 ]; then result="REPAIRED_AND_COMMITTED"; else result="REPAIRED_BUT_PUSH_FAILED"; fi
+              else
+                result="REPAIRED_BUT_COMMIT_FAILED"
+              fi
+            else
+              # Failed independent verification: revert only this issue, preserving last good checkpoint.
+              git reset --hard "$before" >/dev/null 2>&1
+              git clean -fd >/dev/null 2>&1
+              result="REPAIR_REJECTED_BY_INDEPENDENT_VERIFIER"
+            fi
+
+            printf '\n## Issue %s result\n- Finding: %s\n- Result: %s\n- Independent verifier rc: %s\n- Remaining findings after verification: %s\n- Baseline: `%s`\n- Current commit: `%s`\n\n' "$id" "$issue" "$result" "$verify_rc" "$remaining" "$before" "$(git rev-parse HEAD)" >> repair-evidence/ROOT_CAUSE_REPORT.md
+            echo "RESULT=$result"
+          done < repair-queue.txt
+
+          echo "QUEUE_COMPLETE=YES" | tee repair-evidence/queue-complete.txt
+          exit 0
+
+      - name: Final exhaustive verification
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          chmod +x .github/scripts/full-system-exhaustive-audit.sh
+          .github/scripts/full-system-exhaustive-audit.sh > repair-evidence/final-audit.log 2>&1
+          rc=$?
+          cp FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt repair-evidence/FINAL_AUDIT.txt 2>/dev/null || true
+          cp FULL_SYSTEM_EXHAUSTIVE_ERRORS.txt repair-evidence/FINAL_ERRORS.txt 2>/dev/null || true
+          echo "FINAL_AUDIT_RC=$rc" >> repair-evidence/queue-complete.txt
+          grep -E 'CHECKS_TOTAL|CHECKS_PASS|CHECKS_WARN|CHECKS_FAIL|FINAL_VERDICT' FULL_SYSTEM_EXHAUSTIVE_AUDIT.txt 2>/dev/null || true
+          exit 0
+
+      - name: Upload complete repair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: top1-exhaustive-repair-evidence-${{ github.run_number }}
+          path: repair-evidence/
+          if-no-files-found: warn
+
+      - name: Final status
+        if: always()
+        shell: bash
+        run: |
+          echo 'TOP1_REPAIR_QUEUE_FINISHED=YES'
+          echo 'No individual repair failure is allowed to terminate the queue.'
+          echo 'Final audit verdict is evidence only; production PASS requires independent runtime/E2E proof.'
