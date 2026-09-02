@@ -22,6 +22,7 @@ on:
       - ".github/scripts/production_truth_audit.py"
       - "pro_repair_v3.py"
       - "mobile_connection_real_fix.py"
+      - "mobile_connection_hardening_v2.py"
       - "progressive_stage_ui_patch.py"
       - "preflight_patch.py"
       - ".github/scripts/emulator-smoke.sh"
@@ -64,6 +65,12 @@ jobs:
         run: |
           set -euo pipefail
           python3 mobile_connection_real_fix.py
+          python3 -m py_compile pro_repair_v3.py
+      - name: Apply Stage 2 binding hardening
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 mobile_connection_hardening_v2.py
           python3 -m py_compile pro_repair_v3.py
       - name: Apply progressive single-stage UI
         shell: bash
