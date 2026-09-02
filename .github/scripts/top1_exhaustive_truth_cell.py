@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """Top-1 production truth repair/audit cell.
 
-One cell owns the first repair pass, then performs independent checks without
-aborting early. Every exception is collected and the complete report is printed
-before the cell returns its final exit code.
+Repairs known defects first, then runs independent checks without aborting early.
+The report is always printed before the final exit code.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import sys
@@ -135,14 +133,55 @@ def repair_activity() -> bool:
     return changed
 
 
+def kotlin_braces_balanced(text: str) -> tuple[bool, str]:
+    """Count structural Kotlin braces while ignoring comments and quoted strings."""
+    depth = 0
+    i = 0
+    n = len(text)
+    state = "code"
+    while i < n:
+        c = text[i]
+        d = text[i + 1] if i + 1 < n else ""
+        if state == "code":
+            if c == '/' and d == '/': state = "line"; i += 2; continue
+            if c == '/' and d == '*': state = "block"; i += 2; continue
+            if c == '"':
+                if i + 2 < n and text[i:i+3] == '"""': state = "triple"; i += 3; continue
+                state = "string"; i += 1; continue
+            if c == '{': depth += 1
+            elif c == '}':
+                depth -= 1
+                if depth < 0: return False, "closing brace before opening brace"
+            i += 1
+            continue
+        if state == "line":
+            if c == '\n': state = "code"
+            i += 1
+            continue
+        if state == "block":
+            if c == '*' and d == '/': state = "code"; i += 2
+            else: i += 1
+            continue
+        if state == "string":
+            if c == '\\': i += 2; continue
+            if c == '"': state = "code"
+            i += 1
+            continue
+        if state == "triple":
+            if text[i:i+3] == '"""': state = "code"; i += 3
+            else: i += 1
+    return depth == 0, f"structural_depth={depth}"
+
+
 repair_step("contract placeholder repair", repair_contract)
 repair_step("Stage 10 recording-finalization repair", repair_activity)
 
-# Re-read after repairs. Each check is independent and cannot abort the cell.
 contract_text = read(CONTRACT)
 activity = read(ACTIVITY)
 gate = read(GATE)
 repair = read(REPAIR)
+# Stage-2 connection protocol is split across MainActivity and the embedded bridge.
+source_truth = activity + "\n" + repair
 
 try:
     contract = json.loads(contract_text)
@@ -159,7 +198,7 @@ check("button labels unique", len({x.get("button") for x in stages}) == 13, "dup
 
 vocab = contract.get("vocabulary", {})
 required = {"APP_NAME","STATUS_MESSAGES","ERROR_MESSAGES","SCENE_FIELDS","AUDIO_LABELS","EXPORT_METADATA","PROMPT_FIELDS","MATERIAL_RULES"}
-check("vocabulary groups complete", required.issubset(vocab), str(sorted(set(vocab)-required)))
+check("vocabulary groups complete", required.issubset(vocab), str(sorted(required - set(vocab))))
 all_vocab_values: list[str] = []
 for group in vocab.values():
     if isinstance(group, dict): all_vocab_values.extend(str(v) for v in group.values())
@@ -175,7 +214,6 @@ check("StageGate registry binding", "ProductionTruth.stageNames" in gate, "missi
 for token in ("resetForRepair","invalidateDownstream","validEvidence","commit()",'put("sha256"','put("run_id"',"State.RUNNING",'"final_pass"'):
     check(f"StageGate control {token}", token in gate, "missing")
 
-# Stage-by-stage source contracts. These are static proofs only.
 checks_13 = {
     1: ["stage1()","loadApps()","installed-app discovery"],
     2: ["connectMobile()","System.currentTimeMillis()+8000","/health","/status","ControllerProtocol.PING","PONG","session_id","service_bound"],
@@ -195,7 +233,11 @@ for sid, needles in checks_13.items():
     missing=[n for n in needles if n not in activity]
     check(f"Stage {sid} source contract", not missing, "missing: " + ", ".join(missing))
 
-# Known unsafe shortcuts and additional anti-regression checks.
+# Stage 2 protocol belongs to the embedded bridge, so audit the combined source.
+stage2_needles = ["connectMobile()","System.currentTimeMillis()+8000","/health","/status","ControllerProtocol.PING","PONG","session_id","service_bound"]
+missing2 = [n for n in stage2_needles if n not in source_truth]
+check("Stage 2 bridge protocol contract", not missing2, "missing: " + ", ".join(missing2))
+
 for label, pattern in {
     "silent scene truncation": r"\.take\(30\)",
     "generic prompt replacement": r"VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character",
@@ -213,8 +255,8 @@ check("Stage 10 recording size/mime proof", "MediaStore.Video.Media.SIZE" in act
 check("no direct PASS mutation", re.search(r"state\s*=\s*StageGate\.State\.PASS", activity) is None, "direct mutation found")
 check("release remains fail-closed", "real-device verification" in contract.get("release_rule", "") and "emulator-only PASS is never sufficient" in contract.get("release_rule", ""), "release rule weakened")
 
-# Basic source sanity: balanced braces is a cheap but useful early warning.
-check("Kotlin brace balance", activity.count("{") == activity.count("}"), f"{{={activity.count('{')}}}={activity.count('}')}")
+balanced, brace_detail = kotlin_braces_balanced(activity)
+check("Kotlin structural brace balance", balanced, brace_detail)
 check("Python repair scripts compile-shape", all(read(p).strip() for p in (REPAIR, ROOT/".github/scripts/production_truth_audit.py")), "required script empty")
 
 report = {
