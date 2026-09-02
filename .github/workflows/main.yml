@@ -11,6 +11,7 @@ on:
       - "stage_gate.kt"
       - "production_truth_contract.json"
       - ".github/scripts/production_truth_patch.py"
+      - ".github/scripts/production_truth_runtime_fix.py"
       - ".github/scripts/production_truth_audit.py"
       - "pro_repair_v3.py"
       - "mobile_connection_real_fix.py"
@@ -67,6 +68,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/production_truth_patch.py
+          python3 .github/scripts/production_truth_runtime_fix.py
           python3 .github/scripts/production_truth_audit.py | tee production-truth-audit.json
       - name: Verify progressive UI source
         shell: bash
