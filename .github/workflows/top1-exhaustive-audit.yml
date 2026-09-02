@@ -1,0 +1,94 @@
+name: Top1 Exhaustive 13-Stage Audit
+
+on:
+  push:
+    branches: [audit/top1-exhaustive-13-stage-20260902]
+    paths:
+      - '.github/scripts/top1-exhaustive-audit.py'
+      - '.github/workflows/top1-exhaustive-audit.yml'
+      - 'activity_fixed.kt'
+      - 'stage_gate.kt'
+      - 'mobile_connection_real_fix.py'
+      - 'preflight_patch.py'
+      - 'pro_repair_v3.py'
+      - 'KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip'
+      - '.github/one-shot/top1-exhaustive-audit.trigger'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch commit
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run audit-only exhaustive inspection
+        id: audit
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python3 .github/scripts/top1-exhaustive-audit.py | tee TOP1_AUDIT_CONSOLE.txt
+          rc=${PIPESTATUS[0]}
+          echo "AUDIT_SCRIPT_RC=$rc" >> TOP1_AUDIT_CONSOLE.txt
+          exit 0
+
+      - name: Run existing adversarial stage audit as second independent lens
+        id: adversarial
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          python3 .github/scripts/13-stage-adversarial-audit.py | tee 13_STAGE_ADVERSARIAL_CONSOLE.txt
+          rc=${PIPESTATUS[0]}
+          echo "ADVERSARIAL_RC=$rc" >> 13_STAGE_ADVERSARIAL_CONSOLE.txt
+          exit 0
+
+      - name: Preserve complete audit evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          echo '===== AUDIT METADATA =====' > TOP1_AUDIT_META.txt
+          echo "commit=${GITHUB_SHA}" >> TOP1_AUDIT_META.txt
+          echo "branch=${GITHUB_REF_NAME}" >> TOP1_AUDIT_META.txt
+          echo "audit_step=${{ steps.audit.outcome }}" >> TOP1_AUDIT_META.txt
+          echo "adversarial_step=${{ steps.adversarial.outcome }}" >> TOP1_AUDIT_META.txt
+          echo 'mode=AUDIT_ONLY_NO_REPAIR' >> TOP1_AUDIT_META.txt
+          echo 'physical_device_proof=NO' >> TOP1_AUDIT_META.txt
+          test -f TOP1_EXHAUSTIVE_13_STAGE_AUDIT.md || printf 'PRIMARY AUDIT REPORT MISSING\n' > TOP1_EXHAUSTIVE_13_STAGE_AUDIT.md
+          test -f TOP1_EXHAUSTIVE_13_STAGE_AUDIT.json || printf '{"verdict":"REPORT_MISSING"}\n' > TOP1_EXHAUSTIVE_13_STAGE_AUDIT.json
+
+      - name: Upload full evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: top1-exhaustive-13-stage-audit-${{ github.run_number }}
+          path: |
+            TOP1_EXHAUSTIVE_13_STAGE_AUDIT.md
+            TOP1_EXHAUSTIVE_13_STAGE_AUDIT.json
+            TOP1_AUDIT_CONSOLE.txt
+            TOP1_AUDIT_META.txt
+            13_STAGE_ADVERSARIAL_CONSOLE.txt
+            13-stage-adversarial-audit.json
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Print final audit verdict
+        if: always()
+        shell: bash
+        run: |
+          echo '===== TOP1 EXHAUSTIVE AUDIT ====='
+          cat TOP1_EXHAUSTIVE_13_STAGE_AUDIT.md || true
+          echo '===== SECOND LENS ====='
+          cat 13_STAGE_ADVERSARIAL_CONSOLE.txt || true
+          echo '===== AUDIT COMPLETE: FINDINGS DO NOT STOP COLLECTION ====='
