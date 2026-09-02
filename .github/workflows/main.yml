@@ -10,8 +10,8 @@ on:
       - "activity_fixed.kt"
       - "stage_gate.kt"
       - "production_truth_contract.json"
-      - ".github/scripts/production_truth_patch.py"
-      - ".github/scripts/production_truth_runtime_fix.py"
+      - ".github/scripts/production_truth_*.py"
+      - ".github/scripts/production_truth_pipeline.sh"
       - ".github/scripts/production_truth_audit.py"
       - "pro_repair_v3.py"
       - "mobile_connection_real_fix.py"
@@ -63,13 +63,16 @@ jobs:
         run: |
           set -euo pipefail
           python3 progressive_stage_ui_patch.py
-      - name: Apply production truth hardening
+      - name: Run Production Truth Engine full-log cells
         shell: bash
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/production_truth_patch.py
-          python3 .github/scripts/production_truth_runtime_fix.py
-          python3 .github/scripts/production_truth_audit.py | tee production-truth-audit.json
+        run: bash .github/scripts/production_truth_pipeline.sh
+      - name: Upload Production Truth full logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-production-truth-logs
+          path: production-truth-logs
+          if-no-files-found: error
       - name: Verify progressive UI source
         shell: bash
         run: |
