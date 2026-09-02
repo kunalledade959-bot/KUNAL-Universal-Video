@@ -63,8 +63,8 @@ run_step "kotlin-source-integrity" bash -c '
   grep -Fq "object ProductionTruth" activity_fixed.kt || { echo "ERROR: ProductionTruth object missing"; rc=1; }
   grep -Fq "ProductionTruth.button(13)" activity_fixed.kt || { echo "ERROR: stage 13 button is not registry-bound"; rc=1; }
   grep -Fq "ProductionTruth.stageNames" stage_gate.kt || { echo "ERROR: StageGate is not registry-bound"; rc=1; }
-  ! grep -Eq '\.take\(30\)' activity_fixed.kt || { echo "ERROR: silent scene truncation remains"; rc=1; }
-  ! grep -Fq "VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character" activity_fixed.kt || { echo "ERROR: generic prompt replacement remains"; rc=1; }
+  if grep -Fq ".take(30)" activity_fixed.kt; then echo "ERROR: silent scene truncation remains"; rc=1; fi
+  if grep -Fq "VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character" activity_fixed.kt; then echo "ERROR: generic prompt replacement remains"; rc=1; fi
   exit "$rc"
 '
 
@@ -94,7 +94,6 @@ print("CONTRACT_JSON_PASS")
   echo "============================================================"
 } | tee -a "$LOG_DIR/00-combined.log"
 
-# Always print the complete combined log at the end, even when an earlier cell failed.
 echo
 cat "$LOG_DIR/00-combined.log"
 
