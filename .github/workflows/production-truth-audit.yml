@@ -10,19 +10,86 @@ permissions:
 jobs:
   truth-audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Run canonical 13-stage audit
-        run: python3 .github/scripts/production_truth_audit.py | tee production-truth-audit.json
+      - name: Run consolidated repair and truth pipeline
+        shell: bash
+        run: |
+          set +e
+          bash .github/scripts/production_truth_pipeline.sh 2>&1 | tee production-truth-pipeline.log
+          rc=${PIPESTATUS[0]}
+          echo "PIPELINE_EXIT_CODE=$rc" | tee -a production-truth-pipeline.log
+          exit 0
 
-      - name: Upload audit evidence
+      - name: Run independent canonical audit on repaired source
+        shell: bash
+        run: |
+          set +e
+          python3 .github/scripts/production_truth_audit.py | tee production-truth-audit.json
+          rc=${PIPESTATUS[0]}
+          echo "AUDIT_EXIT_CODE=$rc" | tee -a production-truth-audit.json
+          exit 0
+
+      - name: Collect exact root-cause report
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY' | tee production-truth-root-cause-report.txt
+          from pathlib import Path
+          import json
+          try:
+              audit = json.loads(Path('production-truth-audit.json').read_text(encoding='utf-8'))
+          except Exception as exc:
+              audit = {}
+              print(f'AUDIT_JSON_PARSE_ERROR={type(exc).__name__}: {exc}')
+          print('=== KUNAL UNIVERSAL VIDEO ROOT-CAUSE REPORT ===')
+          for key in ('static_contract_pass','runtime_pass','real_device_pass','release_pass'):
+              print(f'{key}={audit.get(key)}')
+          errors = audit.get('errors', [])
+          print(f'error_count={len(errors)}')
+          for i, err in enumerate(errors, 1):
+              print(f'ROOT_CAUSE_{i}={err}')
+          pipeline = Path('production-truth-pipeline.log')
+          if pipeline.exists():
+              print('=== PIPELINE FAILURES / EXCEPTIONS ===')
+              for line in pipeline.read_text(encoding='utf-8', errors='replace').splitlines():
+                  if 'RESULT=FAIL' in line or 'ERROR:' in line or 'Traceback' in line or 'Exception' in line:
+                      print(line)
+          print('=== END ROOT-CAUSE REPORT ===')
+          PY
+
+      - name: Upload complete evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: production-truth-audit
-          path: production-truth-audit.json
-          if-no-files-found: error
+          name: production-truth-complete-evidence
+          path: |
+            production-truth-audit.json
+            production-truth-pipeline.log
+            production-truth-root-cause-report.txt
+            production-truth-logs/
+          if-no-files-found: warn
+
+      - name: Final truth verdict
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              data=json.loads(Path('production-truth-audit.json').read_text(encoding='utf-8'))
+          except Exception:
+              raise SystemExit('FINAL_VERDICT=FAIL: audit output unavailable')
+          if data.get('release_pass') is True:
+              print('FINAL_VERDICT=PASS')
+          else:
+              print('FINAL_VERDICT=FAIL')
+              print('Real-device evidence is still required before release PASS.')
+              raise SystemExit(1)
+          PY
