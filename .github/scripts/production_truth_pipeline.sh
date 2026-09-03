@@ -21,6 +21,10 @@ run_step() {
   return 0
 }
 
+# Repair the known Run #37 Stage-2 blocker before the canonical top-1 gate.
+# This is source-level proof only; real-device proof remains a separate gate.
+run_step "stage2-truth-fix" python3 .github/scripts/stage2_truth_fix.py
+
 # Canonical top-1 selection gate. It only admits repository-native components
 # that are present and consistent with the locked 13-stage production contract.
 run_step "top1-component-registry" python3 .github/scripts/top1_component_registry.py
@@ -42,6 +46,8 @@ run_step "kotlin-source-integrity" bash -c '
   grep -Fq "object ProductionTruth" activity_fixed.kt || { echo "ERROR: ProductionTruth object missing"; rc=1; }
   grep -Fq "ProductionTruth.button(13)" activity_fixed.kt || { echo "ERROR: stage 13 button is not registry-bound"; rc=1; }
   grep -Fq "ProductionTruth.stageNames" stage_gate.kt || { echo "ERROR: StageGate is not registry-bound"; rc=1; }
+  grep -Fq "stage2BindingDeadline=System.currentTimeMillis()+8000L" activity_fixed.kt || { echo "ERROR: Stage 2 binding deadline missing"; rc=1; }
+  grep -Fq "ControllerProtocol.PING" activity_fixed.kt || { echo "ERROR: Stage 2 PING contract missing from source"; rc=1; }
   if grep -Fq ".take(30)" activity_fixed.kt; then echo "ERROR: silent scene truncation remains"; rc=1; fi
   if grep -Fq "VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character" activity_fixed.kt; then echo "ERROR: generic prompt replacement remains"; rc=1; fi
   if grep -Fq "},1500)" activity_fixed.kt; then echo "ERROR: fixed 1500ms recording wait remains"; rc=1; fi
