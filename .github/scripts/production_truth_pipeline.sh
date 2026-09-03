@@ -21,22 +21,17 @@ run_step() {
   return 0
 }
 
-# Repair the known Stage-2 blocker before source transformation. This repair
-# also hardens the generator that can overwrite the Android activity.
-run_step "stage2-truth-fix" python3 .github/scripts/stage2_truth_fix.py
-
-# Transform the source before registry admission. The registry is intentionally
-# a FINAL-component gate, so it must inspect the post-codegen/post-patch source.
+# Transform the source first. Stage-2 repair is then applied to the exact
+# transformed activity/generator boundary that will feed the Android build.
 run_step "contract-codegen" python3 .github/scripts/production_truth_codegen.py
 run_step "production-truth-patch" python3 .github/scripts/production_truth_patch.py
 run_step "production-truth-runtime-fix" python3 .github/scripts/production_truth_runtime_fix.py
+run_step "stage2-truth-fix" python3 .github/scripts/stage2_truth_fix.py
 run_step "top1-component-registry" python3 .github/scripts/top1_component_registry.py
 run_step "top1-exhaustive-repair-and-audit" python3 .github/scripts/top1_exhaustive_truth_cell.py
 run_step "production-truth-audit" python3 .github/scripts/production_truth_audit.py
 
 # Independent source invariants continue even if a mutation step failed.
-# Stage 2 PING is validated against the authoritative source set rather than
-# assuming the generated Activity itself owns the protocol constant.
 run_step "kotlin-source-integrity" bash -c '
   set -u
   rc=0
@@ -51,7 +46,7 @@ run_step "kotlin-source-integrity" bash -c '
     echo "STAGE2_PING_SOURCE=activity_fixed.kt"
   elif grep -Fq "ControllerProtocol.PING" pro_repair_v3.py; then
     echo "STAGE2_PING_SOURCE=pro_repair_v3.py"
-  elif grep -Fq "PING" pro_repair_v3.py && grep -Fq "PONG" pro_repair_v3.py; then
+  elif grep -Fq "const val PING=\"PING\"" pro_repair_v3.py && grep -Fq "const val PONG=\"PONG\"" pro_repair_v3.py; then
     echo "STAGE2_PING_SOURCE=pro_repair_v3.py_protocol_literals"
   else
     echo "ERROR: Stage 2 PING/PONG contract missing from authoritative source set"; rc=1
