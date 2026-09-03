@@ -12,12 +12,13 @@ mkdir -p "$ANDROID_AVD_HOME"
 rm -rf artifact
 mkdir -p artifact
 
-# Reproduce the production build path exactly.
+# Production build path: deterministic source hardening, then the canonical
+# V4 builder. V4 consumes activity_fixed.kt directly and no longer relies on
+# a runtime regex patch against an embedded generator copy.
 python3 preflight_patch.py
 python3 constructor_lifecycle_patch.py
 python3 stage11_hardening_v2.py
-python3 target_discovery_generator_patch.py
-python3 pro_repair_v3.py
+python3 pro_repair_v4.py
 
 test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
 test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
