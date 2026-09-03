@@ -1,3 +1,3 @@
 one-shot exhaustive audit trigger
-run-id: 2026-09-02T16:40+05:30
-scope: A-Z forensic inventory, 13-stage genuine-operation review, crash/error/weakness discovery, best-in-class replacement candidates, no-fake-PASS review
+run-id: 2026-09-03T08:26+05:30
+scope: FULL-A-TO-Z forensic inventory, every nested subsystem, 13-stage genuine-operation review, build-source trace, crash/error/weakness discovery, repair candidates, no-fake-PASS review
