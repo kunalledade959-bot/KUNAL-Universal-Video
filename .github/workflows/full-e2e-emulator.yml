@@ -54,38 +54,51 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
-          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
-          [[ -x "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND" >&2; exit 1; }
+          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND=$SDKMANAGER" >&2; exit 1; }
 
+          # Accept licenses without letting the producer's expected SIGPIPE
+          # masquerade as an sdkmanager failure under pipefail.
           set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
           LICENSE_STATUS=${PIPESTATUS[1]}
           set -o pipefail
           [[ "$LICENSE_STATUS" == "0" ]] || { echo "SDK_LICENSE_ACCEPTANCE_FAILED=$LICENSE_STATUS" >&2; exit "$LICENSE_STATUS"; }
 
-          packages=(
-            "platform-tools"
-            "platforms;android-35"
-            "build-tools;35.0.0"
-            "emulator"
-            "system-images;android-35;default;x86_64"
-          )
-          for attempt in 1 2 3; do
-            echo "SDK_COMPONENT_INSTALL_ATTEMPT=$attempt"
-            if "$SDKMANAGER" --install "${packages[@]}"; then
-              echo "SDK_COMPONENT_INSTALL=PASS"
-              exit 0
-            fi
-            echo "SDK_COMPONENT_INSTALL_ATTEMPT=$attempt FAILED" >&2
-            if (( attempt < 3 )); then
-              rm -rf "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.temp" \
-                     "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.downloadIntermediates" || true
-              sleep 5
-            fi
-          done
-          echo "SDK_COMPONENT_INSTALL=FAIL" >&2
-          exit 1
+          install_package() {
+            local pkg="$1"
+            local attempt
+            for attempt in 1 2 3 4; do
+              echo "SDK_PACKAGE=$pkg ATTEMPT=$attempt"
+              if "$SDKMANAGER" --install "$pkg"; then
+                echo "SDK_PACKAGE=$pkg PASS"
+                return 0
+              fi
+              echo "SDK_PACKAGE=$pkg ATTEMPT=$attempt FAILED" >&2
+              # Remove only transient/corrupt download state before retrying.
+              rm -rf "$SDK_ROOT/.temp" "$SDK_ROOT/.downloadIntermediates" || true
+              if (( attempt < 4 )); then sleep 5; fi
+            done
+            echo "SDK_PACKAGE=$pkg FAIL" >&2
+            return 1
+          }
+
+          # Install independently so a corrupt/transient archive is isolated to
+          # one component instead of invalidating the entire SDK transaction.
+          install_package "platform-tools"
+          install_package "platforms;android-35"
+          install_package "build-tools;35.0.0"
+          install_package "emulator"
+          install_package "system-images;android-35;default;x86_64"
+
+          test -x "$SDK_ROOT/platform-tools/adb"
+          test -x "$SDK_ROOT/emulator/emulator"
+          test -f "$SDK_ROOT/platforms/android-35/android.jar"
+          test -x "$SDK_ROOT/build-tools/35.0.0/aapt2"
+          test -f "$SDK_ROOT/system-images/android-35/default/x86_64/package.xml"
+          echo "ANDROID_SDK_COMPONENTS_VERIFIED=PASS"
 
       - name: Run authoritative production build + emulator + full E2E gate
         shell: bash
