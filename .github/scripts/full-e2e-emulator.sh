@@ -71,9 +71,6 @@ wait_for_adb_ready(){
   return 1
 }
 
-# A healthy app can be hidden behind Android's own SystemUI ANR dialog. That is
-# infrastructure noise, not evidence of an app UI defect. Recover only when the
-# current focus explicitly proves a SystemUI ANR, then re-check the app UI.
 recover_systemui_anr(){
   local windows=""
   windows="$(timeout 30s adb shell dumpsys window windows 2>/dev/null || true)"
@@ -87,6 +84,37 @@ recover_systemui_anr(){
     echo "SYSTEMUI_ANR_RECOVERY_ATTEMPTED=1"
     return 0
   fi
+  return 1
+}
+
+# A successful adb command is not enough for UIAutomator. It can return exit 0
+# with a diagnostic string such as "Killed" when the UiAutomation service dies.
+# Treat only a structurally valid hierarchy as a UI observation. This prevents
+# infrastructure output from being misclassified as a missing app control.
+dump_ui(){
+  local output="$1"
+  local error_file="${output%.xml}.err"
+  local remote="/sdcard/kunal-ui-${RANDOM}-${RANDOM}.xml"
+  local attempt
+  rm -f "$output" "$error_file"
+  for attempt in 1 2 3 4; do
+    rm -f "$output" "$error_file"
+    if timeout 35s adb shell "uiautomator dump --compressed '$remote'" >"$error_file" 2>&1; then
+      if timeout 20s adb shell "cat '$remote'" >"$output" 2>>"$error_file" && \
+         [ -s "$output" ] && \
+         grep -Eq '^<\?xml|<hierarchy' "$output" && \
+         grep -Fq '<hierarchy' "$output"; then
+        timeout 10s adb shell "rm -f '$remote'" >/dev/null 2>&1 || true
+        return 0
+      fi
+    fi
+    timeout 10s adb shell "rm -f '$remote'" >/dev/null 2>&1 || true
+    if recover_systemui_anr; then
+      sleep 4
+    else
+      sleep 2
+    fi
+  done
   return 1
 }
 
@@ -118,28 +146,17 @@ if [[ -z "$PID" ]]; then
 fi
 echo "APP_PID=$PID"
 
-# If Android itself is showing a SystemUI ANR, recover that infrastructure fault
-# before judging the production UI. Never change the app assertion because of it.
 recover_systemui_anr || true
 sleep 2
 
 # Verify the real production UI exposes all 13 numbered stage controls.
 # UiAutomator may omit controls outside the current viewport, so test both the
 # initial hierarchy and a scrolled-to-bottom hierarchy.
-UI_DUMP_OK=0
-for _ in 1 2; do
-  if timeout 30s adb exec-out uiautomator dump /dev/tty >e2e-ui-top.xml 2>e2e-ui-top.err; then
-    if [ -s e2e-ui-top.xml ]; then
-      UI_DUMP_OK=1
-      break
-    fi
-  fi
-  if recover_systemui_anr; then sleep 4; else sleep 2; fi
-done
-[[ "$UI_DUMP_OK" == "1" ]] || { capture_diagnostics; fail "Initial UI dump failed"; }
+if ! dump_ui e2e-ui-top.xml; then
+  capture_diagnostics
+  fail "Initial UI hierarchy could not be obtained from UiAutomation"
+fi
 
-# Do not classify a system ANR dialog as an app-stage failure. If it somehow
-# survived the recovery pass, fail with the infrastructure cause and evidence.
 if grep -Fq 'System UI isn\x27t responding' e2e-ui-top.xml || \
    grep -Fq 'Application Not Responding: com.android.systemui' e2e-ui-top.xml; then
   capture_diagnostics
@@ -151,7 +168,7 @@ for i in $(seq 1 11); do
   grep -Eq "${i} •" e2e-ui-top.xml || {
     if recover_systemui_anr; then
       sleep 4
-      timeout 30s adb exec-out uiautomator dump /dev/tty >e2e-ui-top.xml 2>e2e-ui-top.err || true
+      dump_ui e2e-ui-top.xml || true
     fi
     grep -Eq "${i} •" e2e-ui-top.xml || { capture_diagnostics; fail "Stage ${i} control missing from production UI"; }
   }
@@ -161,11 +178,12 @@ for _ in $(seq 1 5); do
   adb_retry 6 shell input swipe 540 1650 540 350 500 >/dev/null 2>&1 || { capture_diagnostics; fail "UI scroll gesture failed"; }
   sleep 1
 done
-if ! timeout 30s adb exec-out uiautomator dump /dev/tty >e2e-ui-bottom.xml 2>e2e-ui-bottom.err; then
+
+if ! dump_ui e2e-ui-bottom.xml; then
   capture_diagnostics
-  fail "Bottom UI dump failed"
+  fail "Bottom UI hierarchy could not be obtained from UiAutomation"
 fi
-[ -s e2e-ui-bottom.xml ] || { capture_diagnostics; fail "Bottom UI dump produced empty XML"; }
+
 grep -Eq "12 •" e2e-ui-bottom.xml || { capture_diagnostics; fail "Stage 12 control not reachable in production UI"; }
 grep -Eq "13 •" e2e-ui-bottom.xml || { capture_diagnostics; fail "Stage 13 control not reachable in production UI"; }
 
