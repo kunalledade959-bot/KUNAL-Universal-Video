@@ -23,14 +23,14 @@ permissions:
 
 jobs:
   full-e2e-emulator:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -46,8 +46,9 @@ jobs:
       - name: Install Android SDK components
         shell: bash
         run: |
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
 
       - name: Build verified APK using production build path
         shell: bash
@@ -63,15 +64,71 @@ jobs:
           mkdir -p artifact
           cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
 
-      - name: Start Android emulator and run full E2E gate
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 35
-          arch: x86_64
-          profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
-          disable-animations: false
-          script: bash .github/scripts/full-e2e-emulator.sh
+      - name: Start resilient Android emulator and run full E2E gate
+        shell: bash
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_AVD_HOME: /home/runner/.android/avd
+        run: |
+          set -euo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          mkdir -p "$ANDROID_AVD_HOME"
+
+          cleanup() {
+            set +e
+            if adb -s emulator-5554 get-state >/dev/null 2>&1; then
+              adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+            fi
+            if [[ -n "${EMU_PID:-}" ]]; then
+              kill "$EMU_PID" >/dev/null 2>&1 || true
+              wait "$EMU_PID" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          adb kill-server >/dev/null 2>&1 || true
+          adb start-server >/dev/null
+          yes no | avdmanager create avd --force -n test --package 'system-images;android-35;default;x86_64' --device 'pixel_2' >/tmp/avd-create.log 2>&1
+          printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/test.avd/config.ini"
+
+          echo 'Starting cold emulator without reactivecircus runner control-plane hooks.'
+          emulator -avd test -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off >e2e-emulator.log 2>&1 &
+          EMU_PID=$!
+          echo "$EMU_PID" > e2e-emulator.pid
+
+          boot_deadline=$((SECONDS + 900))
+          adb_restarts=0
+          boot_seen=0
+          while (( SECONDS < boot_deadline )); do
+            state="$(adb -s emulator-5554 get-state 2>/dev/null || true)"
+            if [[ "$state" == "device" ]]; then
+              boot="$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
+              if [[ "$boot" == "1" ]]; then
+                boot_seen=1
+                break
+              fi
+            elif [[ "$state" == "offline" && $adb_restarts -lt 3 ]]; then
+              adb kill-server >/dev/null 2>&1 || true
+              sleep 2
+              adb start-server >/dev/null 2>&1 || true
+              adb_restarts=$((adb_restarts + 1))
+            fi
+            sleep 3
+          done
+
+          if [[ "$boot_seen" != "1" ]]; then
+            echo 'EMULATOR_BOOT_FAILURE' > e2e-emulator-failure.txt
+            adb devices -l > e2e-boot-adb-devices.txt 2>&1 || true
+            adb -s emulator-5554 shell getprop > e2e-boot-props.txt 2>&1 || true
+            tail -n 1000 e2e-emulator.log > e2e-boot-log.txt || true
+            exit 1
+          fi
+
+          echo 'Emulator booted and ADB is healthy.' | tee e2e-emulator-ready.txt
+          adb -s emulator-5554 wait-for-device
+          adb -s emulator-5554 shell echo KUNAL_E2E_ADB_READY | tee e2e-adb-ready.txt
+          bash .github/scripts/full-e2e-emulator.sh
 
       - name: Upload E2E evidence
         if: always()
