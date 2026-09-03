@@ -8,6 +8,7 @@ on:
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
+      - "constructor_lifecycle_patch.py"
       - "stage11_hardening_v2.py"
       - ".github/scripts/full-e2e-emulator.sh"
       - ".github/workflows/full-e2e-emulator.yml"
@@ -53,6 +54,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 preflight_patch.py
+          python3 constructor_lifecycle_patch.py
           python3 stage11_hardening_v2.py
           python3 pro_repair_v3.py
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
