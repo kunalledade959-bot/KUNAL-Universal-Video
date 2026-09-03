@@ -19,9 +19,6 @@ fail(){
 
 [ -s "$APK" ] || fail "APK missing"
 
-# Every ADB operation is time-bounded. Emulator/ADB occasionally reports booted
-# while the daemon is still unhealthy, so an unbounded shell call must never be
-# allowed to stall the whole E2E job.
 adb_once(){
   timeout 30s adb "$@"
 }
@@ -46,6 +43,7 @@ capture_diagnostics(){
   timeout 20s adb shell getprop dev.bootcomplete >> e2e-diagnostics-boot.txt 2>&1 || true
   timeout 30s adb shell dumpsys package "$PKG" > e2e-diagnostics-package.txt 2>&1 || true
   timeout 30s adb shell dumpsys activity activities > e2e-diagnostics-activity.txt 2>&1 || true
+  timeout 30s adb shell dumpsys window windows > e2e-diagnostics-windows.txt 2>&1 || true
   timeout 30s adb logcat -d -b crash > e2e-diagnostics-crash.txt 2>&1 || true
   timeout 30s adb logcat -d -t 1000 > e2e-diagnostics-logcat.txt 2>&1 || true
   echo "=== END E2E DIAGNOSTICS ==="
@@ -59,8 +57,6 @@ wait_for_adb_ready(){
     if timeout 20s adb wait-for-device >/dev/null 2>&1; then
       boot="$(timeout 20s adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)"
       if [[ "$boot" == "1" ]] && timeout 20s adb shell 'echo KUV_ADB_READY' 2>/dev/null | grep -q 'KUV_ADB_READY'; then
-        # Second health check prevents a transiently responding daemon from
-        # being mistaken for a stable connection.
         if timeout 20s adb get-state 2>/dev/null | grep -q '^device$' && \
            timeout 20s adb shell 'echo KUV_ADB_HEALTHY' 2>/dev/null | grep -q 'KUV_ADB_HEALTHY'; then
           echo "ADB_READY=1"
@@ -75,9 +71,27 @@ wait_for_adb_ready(){
   return 1
 }
 
+# A healthy app can be hidden behind Android's own SystemUI ANR dialog. That is
+# infrastructure noise, not evidence of an app UI defect. Recover only when the
+# current focus explicitly proves a SystemUI ANR, then re-check the app UI.
+recover_systemui_anr(){
+  local windows=""
+  windows="$(timeout 30s adb shell dumpsys window windows 2>/dev/null || true)"
+  if grep -Fq 'Application Not Responding: com.android.systemui' <<<"$windows" || \
+     grep -Fq 'System UI isn\x27t responding' <<<"$windows"; then
+    echo "SYSTEMUI_ANR_DETECTED=1"
+    printf '%s\n' "$windows" > e2e-systemui-anr-windows.txt
+    timeout 30s adb shell am force-stop com.android.systemui >/dev/null 2>&1 || true
+    sleep 5
+    adb_retry 6 shell 'echo KUV_SYSTEMUI_RECOVERED' >/dev/null 2>&1 || true
+    echo "SYSTEMUI_ANR_RECOVERY_ATTEMPTED=1"
+    return 0
+  fi
+  return 1
+}
+
 wait_for_adb_ready 300 || fail "ADB did not become fully ready"
 
-# Install with bounded retries and retain the actual installer output.
 if ! adb_retry 8 install -r "$APK" >e2e-install.txt 2>&1; then
   capture_diagnostics
   fail "APK install failed"
@@ -104,16 +118,43 @@ if [[ -z "$PID" ]]; then
 fi
 echo "APP_PID=$PID"
 
+# If Android itself is showing a SystemUI ANR, recover that infrastructure fault
+# before judging the production UI. Never change the app assertion because of it.
+recover_systemui_anr || true
+sleep 2
+
 # Verify the real production UI exposes all 13 numbered stage controls.
 # UiAutomator may omit controls outside the current viewport, so test both the
 # initial hierarchy and a scrolled-to-bottom hierarchy.
-if ! timeout 30s adb exec-out uiautomator dump /dev/tty >e2e-ui-top.xml 2>e2e-ui-top.err; then
+UI_DUMP_OK=0
+for _ in 1 2; do
+  if timeout 30s adb exec-out uiautomator dump /dev/tty >e2e-ui-top.xml 2>e2e-ui-top.err; then
+    if [ -s e2e-ui-top.xml ]; then
+      UI_DUMP_OK=1
+      break
+    fi
+  fi
+  if recover_systemui_anr; then sleep 4; else sleep 2; fi
+done
+[[ "$UI_DUMP_OK" == "1" ]] || { capture_diagnostics; fail "Initial UI dump failed"; }
+
+# Do not classify a system ANR dialog as an app-stage failure. If it somehow
+# survived the recovery pass, fail with the infrastructure cause and evidence.
+if grep -Fq 'System UI isn\x27t responding' e2e-ui-top.xml || \
+   grep -Fq 'Application Not Responding: com.android.systemui' e2e-ui-top.xml; then
   capture_diagnostics
-  fail "Initial UI dump failed"
+  echo 'E2E_FAIL: SystemUI remained unhealthy during production UI observation' | tee "$FAIL"
+  exit 1
 fi
-[ -s e2e-ui-top.xml ] || { capture_diagnostics; fail "Initial UI dump produced empty XML"; }
+
 for i in $(seq 1 11); do
-  grep -Eq "${i} •" e2e-ui-top.xml || { capture_diagnostics; fail "Stage ${i} control missing from production UI"; }
+  grep -Eq "${i} •" e2e-ui-top.xml || {
+    if recover_systemui_anr; then
+      sleep 4
+      timeout 30s adb exec-out uiautomator dump /dev/tty >e2e-ui-top.xml 2>e2e-ui-top.err || true
+    fi
+    grep -Eq "${i} •" e2e-ui-top.xml || { capture_diagnostics; fail "Stage ${i} control missing from production UI"; }
+  }
 done
 
 for _ in $(seq 1 5); do
@@ -138,7 +179,6 @@ else
   echo "ACCESSIBILITY_PREEXISTING=0"
 fi
 
-# Restart test: prove the production controller survives a clean stop/start cycle.
 adb_retry 8 shell am force-stop "$PKG" || { capture_diagnostics; fail "Restart force-stop failed"; }
 sleep 2
 if ! adb_retry 8 shell am start -W -n "$PKG/.MainActivity" >e2e-restart-start.txt 2>&1; then
