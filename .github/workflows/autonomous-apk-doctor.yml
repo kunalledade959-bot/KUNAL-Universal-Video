@@ -31,7 +31,7 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Prepare failure evidence
+      - name: Prepare complete failure evidence
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -43,17 +43,17 @@ jobs:
             echo "Triggering workflow run: $RUN_ID" | tee ai-evidence/trigger.txt
             gh run download "$RUN_ID" -n full-e2e-emulator-evidence -D ai-evidence/full-e2e || true
             gh run download "$RUN_ID" -n KUNAL-Universal-Video-runtime-evidence -D ai-evidence/runtime || true
-            gh run download "$RUN_ID" -n final-production-user-flow-evidence -D ai-evidence/final-user-flow || true
+            gh run download "$RUN_ID" -n KUNAL-Universal-Video-final-user-flow-evidence -D ai-evidence/final-user-flow || true
             gh run view "$RUN_ID" --log-failed > ai-evidence/trigger-failed-log.txt 2>&1 || true
           else
             printf '%s\n' 'Manual autonomous repair. Inspect current repository and run the real gate.' > ai-evidence/manual-trigger.txt
           fi
-          find ai-evidence -type f -maxdepth 4 -print | sort || true
+          find ai-evidence -type f -maxdepth 6 -print | sort || true
 
       - name: Install Copilot CLI
         run: npm install -g @github/copilot
 
-      - name: Iterative autonomous repair loop
+      - name: Iterative root-cause repair loop
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -62,87 +62,46 @@ jobs:
           MAX_ITERATIONS=8
           PASS=0
           mkdir -p ai-evidence/iterations
-
           for ITERATION in $(seq 1 "$MAX_ITERATIONS"); do
-            echo "========== AUTOREPAIR ITERATION $ITERATION/$MAX_ITERATIONS =========="
             mkdir -p "ai-evidence/iterations/$ITERATION"
-
             copilot --autopilot --yolo --max-autopilot-continues 12 -p "
             You are the senior production Android repair engineer for KUNAL Universal Video.
-            This is autonomous repair iteration $ITERATION of $MAX_ITERATIONS.
+            Repair only evidence-backed root causes. Never weaken tests, fake PASS, skip stages, or hide errors.
+            Read ALL ai-evidence, especially final-user-flow evidence, the current git diff, the production ZIP,
+            activity_fixed.kt, StageGate, all repair scripts, self-healing-gate.sh, full-e2e-emulator.sh and
+            final-production-user-flow.sh.
 
-            PRIMARY RULE: fix the first real root cause, verify it, then move to the next real error. Never hide an error, weaken a test, bypass a gate, or claim PASS without actual evidence.
+            For final user-flow failures, trace the complete dependency chain from visible UI through MainActivity,
+            package-manager installed-app enumeration, Spinner adapter/selection state, SharedPreferences persistence,
+            bridge connection, AccessibilityService targetPackage/foreground state, and target launch. Repair the
+            product at the actual root, not the assertion. If the evidence proves an emulator/SystemUI/ADB problem,
+            repair infrastructure instead and do not alter app behavior to compensate.
 
-            READ FIRST:
-            1. All files under ai-evidence, including final-user-flow evidence and prior iteration notes.
-            2. The current repository state and git diff.
-            3. KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip and the production build/repair scripts.
-            4. self-healing-gate.sh, full-e2e-emulator.sh, and final-production-user-flow.sh.
-
-            CLASSIFY THE FAILURE before editing:
-            - CI/emulator/tooling/infrastructure failure: repair the actual CI/tooling script or configuration.
-            - Android build/source/runtime failure: repair the real Android project/source.
-            - E2E functional failure: repair the real feature/gate contract, not the test assertion.
-            Never change app behavior to compensate for an infrastructure failure.
-
-            SPECIAL RULE FOR FINAL USER FLOW:
-            Treat TARGET_SELECTION_CONTROL_MISSING, TARGET_SELECTION_LIST_NOT_POPULATED_OR_VISIBLE,
-            TARGET_ROW_NOT_FOUND, TARGET_SELECTION_REFLECTED_FAILURE, target persistence failure,
-            target foreground failure, or any similar selection/launch defect as a real product defect.
-            Trace it from UI -> MainActivity state -> package manager -> persistence -> bridge/accessibility -> target launch.
-            Do not make the test easier just to obtain PASS.
-
-            QUALITY BAR:
-            - Production-grade only. No toy app, stub, fake result, skipped stage, disabled assertion, or swallowed fatal error.
-            - Preserve package com.kunal.universalvideo and the intended controller, target-app control, accessibility, MediaProjection, TTS/audio, video assembly, verification, and gallery-export architecture.
-            - Make the smallest correct change with the lowest regression risk.
-            - Keep changes idempotent and deterministic where possible.
-            - Do not edit secrets, credentials, or unrelated files.
-            - You MAY edit Android project sources, repair/build scripts, E2E scripts, and CI workflow files when evidence proves the defect is there.
-            - Do not merely rewrite a gate so it passes. Gates must remain strict.
-            - Before finishing this iteration, run every practical static/build check available on Ubuntu.
-            - Write a concise diagnosis and exact repair to ai-evidence/iterations/$ITERATION/repair.md.
-            - Do not stop merely because the previous error disappeared. Look for the next blocker only after verification.
+            After every repair, run static checks and the authoritative self-healing-gate.sh. Then continue to the
+            next real blocker until the gate passes or the bounded iteration limit is reached. Record diagnosis and
+            exact changed files in ai-evidence/iterations/$ITERATION/repair.md.
             " > "ai-evidence/iterations/$ITERATION/copilot.log" 2>&1
-            COPILOT_STATUS=$?
-
-            if [[ "$COPILOT_STATUS" != "0" ]]; then
-              echo "Copilot iteration $ITERATION exited $COPILOT_STATUS; inspect evidence and continue." | tee -a "ai-evidence/iterations/$ITERATION/result.txt"
-            fi
-
+            STATUS=$?
+            echo "COPILOT_STATUS=$STATUS" > "ai-evidence/iterations/$ITERATION/result.txt"
             git diff --check > "ai-evidence/iterations/$ITERATION/git-diff-check.txt" 2>&1 || true
             git status --short > "ai-evidence/iterations/$ITERATION/git-status.txt" 2>&1 || true
-
-            echo "Running the authoritative production + emulator + full E2E gate..."
             rm -f e2e-PASS.txt
             set +e
             bash .github/scripts/self-healing-gate.sh > "ai-evidence/iterations/$ITERATION/gate.log" 2>&1
             GATE_STATUS=$?
             set -e
-
-            cp e2e-PASS.txt "ai-evidence/iterations/$ITERATION/e2e-PASS.txt" 2>/dev/null || true
-            cp e2e-emulator-failure.txt "ai-evidence/iterations/$ITERATION/e2e-emulator-failure.txt" 2>/dev/null || true
-            cp e2e-boot-log.txt "ai-evidence/iterations/$ITERATION/e2e-boot-log.txt" 2>/dev/null || true
-            cp e2e-start.txt "ai-evidence/iterations/$ITERATION/e2e-start.txt" 2>/dev/null || true
-            cp e2e-crash-logcat.txt "ai-evidence/iterations/$ITERATION/e2e-crash-logcat.txt" 2>/dev/null || true
-            tail -n 400 "ai-evidence/iterations/$ITERATION/gate.log" > "ai-evidence/iterations/$ITERATION/gate-tail.txt" || true
-
+            echo "GATE_STATUS=$GATE_STATUS" >> "ai-evidence/iterations/$ITERATION/result.txt"
+            cp e2e-*.txt "ai-evidence/iterations/$ITERATION/" 2>/dev/null || true
+            cp e2e-*.xml "ai-evidence/iterations/$ITERATION/" 2>/dev/null || true
+            cp e2e-*.log "ai-evidence/iterations/$ITERATION/" 2>/dev/null || true
             if [[ "$GATE_STATUS" == "0" && -f e2e-PASS.txt ]]; then
-              echo "SELF_HEALING_GATE_PASS iteration=$ITERATION" | tee "ai-evidence/iterations/$ITERATION/result.txt"
               PASS=1
               break
             fi
-
-            echo "SELF_HEALING_GATE_FAIL iteration=$ITERATION status=$GATE_STATUS" | tee "ai-evidence/iterations/$ITERATION/result.txt"
-            find . -maxdepth 1 -type f \( -name 'e2e-*.txt' -o -name 'e2e-*.log' -o -name 'e2e-*.xml' -o -name 'e2e-*.json' -o -name 'avd-create.log' \) -print -exec cp -f {} "ai-evidence/" \; 2>/dev/null || true
           done
+          [[ "$PASS" == "1" ]] || { echo 'AUTOREPAIR_EXHAUSTED'; exit 1; }
 
-          if [[ "$PASS" != "1" ]]; then
-            echo 'AUTOREPAIR_EXHAUSTED: no verified production E2E PASS after bounded repair iterations.'
-            exit 1
-          fi
-
-      - name: Final source integrity checks
+      - name: Final integrity and publish
         if: ${{ success() }}
         shell: bash
         run: |
@@ -151,23 +110,10 @@ jobs:
           test -s e2e-PASS.txt
           grep -q 'PASS' e2e-PASS.txt
           git diff --check
-          git status --short
-          echo 'FINAL_VERIFIED_SOURCE_INTEGRITY_PASS'
-
-      - name: Commit only after real E2E PASS
-        if: ${{ success() }}
-        shell: bash
-        run: |
-          set -euo pipefail
           git config user.name 'kunalledade959-bot'
           git config user.email 'kunalledade959-bot@users.noreply.github.com'
-          git add KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip \
-            activity_fixed.kt stage11_hardening_v2.py preflight_patch.py \
-            constructor_lifecycle_patch.py pro_repair_v3.py \
-            .github/scripts .github/workflows ai-evidence
-          if git diff --cached --quiet; then
-            echo 'Verified gate passed and there are no source changes to publish.'
-          else
+          git add KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip activity_fixed.kt stage11_hardening_v2.py preflight_patch.py constructor_lifecycle_patch.py pro_repair_v3.py .github/scripts .github/workflows ai-evidence
+          if ! git diff --cached --quiet; then
             git commit -m 'fix: autonomously repair and verify production Android system'
             git push origin main
           fi
