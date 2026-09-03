@@ -20,11 +20,11 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: MASTER X-RAY - pre-repair forensic collection
+      - name: MASTER X-RAY V2 - pre-repair forensic collection
         shell: bash
         run: |
           set +e
-          python3 .github/scripts/master_xray_forensic.py 2>&1 | tee master-xray-pre.log
+          python3 .github/scripts/master_xray_forensic_v2.py 2>&1 | tee master-xray-pre.log
           rc=${PIPESTATUS[0]}
           echo "MASTER_XRAY_PRE_EXIT_CODE=$rc" | tee -a master-xray-pre.log
           exit 0
@@ -48,12 +48,12 @@ jobs:
           echo "AUDIT_EXIT_CODE=$rc" | tee production-truth-audit-status.txt
           exit 0
 
-      - name: MASTER X-RAY - post-repair forensic collection
+      - name: MASTER X-RAY V2 - post-repair forensic collection
         if: always()
         shell: bash
         run: |
           set +e
-          python3 .github/scripts/master_xray_forensic.py 2>&1 | tee master-xray-post.log
+          python3 .github/scripts/master_xray_forensic_v2.py 2>&1 | tee master-xray-post.log
           rc=${PIPESTATUS[0]}
           echo "MASTER_XRAY_POST_EXIT_CODE=$rc" | tee -a master-xray-post.log
           exit 0
