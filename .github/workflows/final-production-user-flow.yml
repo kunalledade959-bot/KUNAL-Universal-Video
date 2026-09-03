@@ -102,6 +102,16 @@ jobs:
           done
           [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" == '1' ]]
 
+      - name: Disable unstable emulator Bluetooth before app test
+        shell: bash
+        run: |
+          set -euo pipefail
+          adb -s emulator-5554 shell settings put global bluetooth_on 0 >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell svc bluetooth disable >/dev/null 2>&1 || true
+          adb -s emulator-5554 shell am force-stop com.android.bluetooth >/dev/null 2>&1 || true
+          sleep 5
+          adb -s emulator-5554 shell dumpsys bluetooth_manager > final-user-flow-bluetooth-state.txt 2>&1 || true
+
       - name: Run final production user-flow gate
         shell: bash
         run: |
@@ -118,5 +128,6 @@ jobs:
             artifact/
             avd-create.log
             final-user-flow-emulator.log
+            final-user-flow-bluetooth-state.txt
           if-no-files-found: warn
           retention-days: 14
