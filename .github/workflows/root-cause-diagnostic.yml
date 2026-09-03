@@ -1,0 +1,176 @@
+name: Root Cause Diagnostic
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: Single Root-Cause Evidence Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Bootstrap Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -u
+          mkdir -p diagnostic
+          {
+            echo "=== sdkmanager --list_installed ==="
+            sdkmanager --list_installed || true
+            echo "=== licenses ==="
+            yes | sdkmanager --licenses >/dev/null 2>&1 || true
+            echo "=== install ==="
+            sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
+          } > diagnostic/sdk-bootstrap.log 2>&1
+
+      - name: Capture repository and toolchain state
+        shell: bash
+        run: |
+          set +e
+          mkdir -p diagnostic
+          {
+            echo "=== UTC ==="; date -u
+            echo "=== commit ==="; git rev-parse HEAD
+            echo "=== branch ==="; git branch --show-current
+            echo "=== status ==="; git status --short
+            echo "=== java ==="; java -version
+            echo "=== gradle ==="; gradle --version
+            echo "=== adb ==="; adb version
+            echo "=== emulator ==="; emulator -version
+            echo "=== key files ==="
+            git ls-files .github/workflows .github/scripts '*.py' '*.kt' | sort
+          } > diagnostic/environment.txt 2>&1
+          git diff a8dab7f10eb14c8888d9ff8cd01398aec4bbfcf2...HEAD -- \
+            '.github/workflows' '.github/scripts' '*.py' '*.kt' > diagnostic/current-vs-known-good.diff 2>&1
+
+      - name: Build current production APK without repair loops
+        shell: bash
+        run: |
+          set +e
+          mkdir -p diagnostic artifact
+          {
+            echo "=== preflight_patch.py ==="
+            python3 preflight_patch.py
+            echo "preflight_exit=$?"
+            echo "=== canonical activity checks ==="
+            grep -nE 'queryIntentActivities|CATEGORY_LAUNCHER|getLaunchIntentForPackage|mainHandler|getInstalledApplications' activity_fixed.kt
+            echo "=== production builder ==="
+            python3 pro_repair_v4.py
+            echo "builder_exit=$?"
+            echo "=== output files ==="
+            ls -lh KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json 2>&1
+          } > diagnostic/build.log 2>&1
+          if test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk; then cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk; fi
+
+      - name: Start clean emulator and capture app behavior
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -wipe-data
+          disable-animations: true
+          script: |
+            set +e
+            mkdir -p diagnostic
+            exec > >(tee diagnostic/emulator-run.log) 2>&1
+            echo "=== emulator ready ==="
+            adb devices -l
+            adb wait-for-device
+            adb shell getprop ro.build.version.release
+            adb shell getprop ro.build.version.sdk
+            adb shell settings get global animator_duration_scale
+            adb shell settings put global bluetooth_on 0 || true
+            adb shell svc bluetooth disable || true
+            adb shell am force-stop com.android.bluetooth || true
+            echo "=== install ==="
+            adb install -r artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+            echo "install_exit=$?"
+            echo "=== package ==="
+            adb shell dumpsys package com.kunal.universalvideo > diagnostic/package.txt
+            echo "=== launch ==="
+            adb shell am force-stop com.kunal.universalvideo
+            adb shell pm clear com.kunal.universalvideo
+            adb shell monkey -p com.kunal.universalvideo -c android.intent.category.LAUNCHER 1
+            echo "launch_exit=$?"
+            sleep 8
+            echo "=== focus ==="
+            adb shell dumpsys activity activities | grep -E 'mResumedActivity|mFocusedApp' || true
+            adb shell dumpsys window windows | grep -E 'mCurrentFocus|mFocusedApp' || true
+            echo "=== process ==="
+            adb shell pidof com.kunal.universalvideo || true
+            echo "=== UI hierarchy ==="
+            adb shell uiautomator dump /sdcard/window.xml >/dev/null 2>&1
+            adb shell cat /sdcard/window.xml > diagnostic/ui-hierarchy.xml
+            echo "=== screenshot ==="
+            adb exec-out screencap -p > diagnostic/screenshot.png
+            echo "=== crash/anr ==="
+            adb logcat -d -v threadtime | grep -E 'FATAL EXCEPTION|ANR in|Application Not Responding|DeadSystemException|system_server|com.android.systemui|com.android.bluetooth|com.kunal.universalvideo' > diagnostic/relevant-logcat.txt || true
+            adb logcat -d -v threadtime > diagnostic/full-logcat.txt
+            echo "=== final state ==="
+            adb shell dumpsys activity activities > diagnostic/activity.txt
+            adb shell dumpsys window windows > diagnostic/window.txt
+            adb shell dumpsys meminfo com.kunal.universalvideo > diagnostic/meminfo.txt 2>&1 || true
+
+      - name: Create deterministic root-cause report
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p diagnostic
+          {
+            echo "# ROOT CAUSE DIAGNOSTIC"
+            echo
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Known-good baseline: a8dab7f10eb14c8888d9ff8cd01398aec4bbfcf2"
+            echo
+            echo "## Classification rules"
+            echo "- BUILD_FAILURE: APK was not produced by the production build path."
+            echo "- INSTALL_FAILURE: APK existed but adb install failed."
+            echo "- LAUNCH_FAILURE: install passed but MainActivity was not foreground/alive."
+            echo "- SYSTEM_FAILURE: SystemUI/system_server/Bluetooth/DeadSystem/ANR evidence exists."
+            echo "- UI_FAILURE: app is alive and foreground, but production UI hierarchy is invalid."
+            echo "- PASS: app installed, MainActivity foreground, process alive, and hierarchy captured."
+            echo
+            echo "## Observed evidence"
+            test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk && echo "APK_PRESENT=1" || echo "APK_PRESENT=0"
+            grep -q 'builder_exit=0' diagnostic/build.log 2>/dev/null && echo "BUILD_COMMAND_EXIT=0" || echo "BUILD_COMMAND_EXIT!=0_OR_NOT_RECORDED"
+            grep -q 'install_exit=0' diagnostic/emulator-run.log 2>/dev/null && echo "INSTALL_COMMAND_EXIT=0" || echo "INSTALL_COMMAND_EXIT!=0_OR_NOT_RECORDED"
+            grep -q 'com.kunal.universalvideo/.MainActivity' diagnostic/emulator-run.log 2>/dev/null && echo "MAIN_ACTIVITY_REFERENCED=1" || true
+            grep -q 'com.android.systemui\|system_server\|com.android.bluetooth\|DeadSystemException\|Application Not Responding\|ANR in' diagnostic/relevant-logcat.txt 2>/dev/null && echo "SYSTEM_ERROR_EVIDENCE=1" || echo "SYSTEM_ERROR_EVIDENCE=0"
+            test -s diagnostic/ui-hierarchy.xml && echo "UI_HIERARCHY_CAPTURED=1" || echo "UI_HIERARCHY_CAPTURED=0"
+            echo
+            echo "## Exact next action"
+            echo "Do not run AutoRepair or Final Production User Flow from this diagnostic result. Diagnose the first failing boundary using the attached logs, then make one root-cause change only."
+          } > diagnostic/ROOT_CAUSE_REPORT.md
+
+      - name: Upload one complete diagnostic artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROOT-CAUSE-DIAGNOSTIC-${{ github.run_id }}
+          path: |
+            diagnostic/
+            artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          if-no-files-found: warn
+          retention-days: 14
