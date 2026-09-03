@@ -89,7 +89,7 @@ jobs:
 
           adb kill-server >/dev/null 2>&1 || true
           adb start-server >/dev/null
-          yes no | avdmanager create avd --force -n test --package 'system-images;android-35;default;x86_64' --device 'pixel_2' >/tmp/avd-create.log 2>&1
+          printf 'no\n' | avdmanager create avd --force -n test --package 'system-images;android-35;default;x86_64' --device 'pixel_2' >/tmp/avd-create.log 2>&1
           printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/test.avd/config.ini"
 
           echo 'Starting cold emulator without reactivecircus runner control-plane hooks.'
