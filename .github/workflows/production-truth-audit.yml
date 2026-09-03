@@ -10,12 +10,22 @@ permissions:
 jobs:
   truth-audit:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: MASTER X-RAY - pre-repair forensic collection
+        shell: bash
+        run: |
+          set +e
+          python3 .github/scripts/master_xray_forensic.py 2>&1 | tee master-xray-pre.log
+          rc=${PIPESTATUS[0]}
+          echo "MASTER_XRAY_PRE_EXIT_CODE=$rc" | tee -a master-xray-pre.log
+          # Findings are evidence, not a reason to stop collection.
+          exit 0
 
       - name: Run consolidated repair and truth pipeline
         shell: bash
@@ -34,6 +44,16 @@ jobs:
           rc=${PIPESTATUS[0]}
           printf '%s\n' "$rc" > production-truth-audit.exit_code
           echo "AUDIT_EXIT_CODE=$rc" | tee production-truth-audit-status.txt
+          exit 0
+
+      - name: MASTER X-RAY - post-repair forensic collection
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          python3 .github/scripts/master_xray_forensic.py 2>&1 | tee master-xray-post.log
+          rc=${PIPESTATUS[0]}
+          echo "MASTER_XRAY_POST_EXIT_CODE=$rc" | tee -a master-xray-post.log
           exit 0
 
       - name: Collect exact root-cause report
@@ -60,6 +80,13 @@ jobs:
           print(f'error_count={len(errors)}')
           for i, err in enumerate(errors, 1):
               print(f'ROOT_CAUSE_{i}={err}')
+          for name in ('master-xray-pre.log','master-xray-post.log'):
+              p=Path(name)
+              if p.exists():
+                  print(f'=== {name.upper()} EXCEPTIONS/FAILURES ===')
+                  for line in p.read_text(encoding='utf-8',errors='replace').splitlines():
+                      if 'CHECK_EXECUTION_ERROR' in line or 'SCAN_GAP' in line or '"status": "FAIL"' in line:
+                          print(line)
           pipeline = Path('production-truth-pipeline.log')
           if pipeline.exists():
               print('=== PIPELINE FAILURES / EXCEPTIONS ===')
@@ -75,6 +102,9 @@ jobs:
         with:
           name: production-truth-complete-evidence
           path: |
+            master-xray-evidence/
+            master-xray-pre.log
+            master-xray-post.log
             production-truth-audit.json
             production-truth-audit.exit_code
             production-truth-audit-status.txt
@@ -94,6 +124,9 @@ jobs:
               data=json.loads(Path('production-truth-audit.json').read_text(encoding='utf-8'))
           except Exception:
               raise SystemExit('FINAL_VERDICT=FAIL: audit output unavailable')
+          xray=Path('master-xray-evidence/MASTER_XRAY_REPORT.json')
+          if not xray.exists():
+              raise SystemExit('FINAL_VERDICT=FAIL: master X-ray output unavailable')
           if data.get('release_pass') is True:
               print('FINAL_VERDICT=PASS')
           else:
