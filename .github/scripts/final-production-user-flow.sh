@@ -34,6 +34,8 @@ capture_all(){
       echo 'INFRASTRUCTURE: UIAUTOMATOR_DUMP_UNAVAILABLE'
     elif ! grep -Eq 'android.widget.Spinner' "$EVIDENCE/ui.xml"; then
       echo 'APP: TARGET_SELECTION_CONTROL_MISSING'
+    elif ! grep -Fq 'TARGET=' "$EVIDENCE/root-cause-trigger.txt" && grep -Fq 'Target' "$EVIDENCE/root-cause-trigger.txt"; then
+      echo 'APP: TARGET_SELECTION_FLOW_FAILURE'
     else
       echo 'FUNCTIONAL: USER_FLOW_CONTRACT_FAILURE'
     fi
@@ -67,12 +69,7 @@ m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',sp[0].attrib.get('bounds',''))
 if not m: raise SystemExit('TARGET_SELECTION_BOUNDS_INVALID')
 x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2)
 PY
-then
-  :
-else
-  STATUS=$?
-  fail "Production target-selection control is missing or malformed (diagnostic=$STATUS)"
-fi
+then :; else STATUS=$?; fail "Production target-selection control is missing or malformed (diagnostic=$STATUS)"; fi
 read -r X Y < "$EVIDENCE/spinner-center.txt"
 adbq shell input tap "$X" "$Y" || fail "Target selection control could not be opened"
 sleep 2
@@ -90,7 +87,8 @@ PY
 )"
 fi
 [[ -n "$TARGET" ]] || fail "Target selection popup exists but contains no real target package"
-printf '%s\n' "$TARGET" | tee "$EVIDENCE/target-package.txt"
+printf 'TARGET=%s\n' "$TARGET" | tee "$EVIDENCE/target-package.txt"
+printf 'TARGET=%s\n' "$TARGET" > "$EVIDENCE/root-cause-trigger.txt"
 
 if python3 - "$EVIDENCE/ui-selection-open.xml" "$TARGET" > "$EVIDENCE/target-center.txt" <<'PY'
 import sys,xml.etree.ElementTree as ET,re
@@ -102,12 +100,7 @@ for n in root.iter():
             x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2); break
 else: raise SystemExit('TARGET_ROW_NOT_FOUND')
 PY
-then
-  :
-else
-  STATUS=$?
-  fail "Selected target row is not represented in popup hierarchy (diagnostic=$STATUS)"
-fi
+then :; else STATUS=$?; fail "Selected target row is not represented in popup hierarchy (diagnostic=$STATUS)"; fi
 read -r RX RY < "$EVIDENCE/target-center.txt"
 adbq shell input tap "$RX" "$RY" || fail "Target row tap failed"
 sleep 2
@@ -117,5 +110,22 @@ grep -Fq "$TARGET" "$EVIDENCE/ui-after-selection.xml" || fail "Target selection 
 adbq shell run-as "$PKG" cat shared_prefs/kuv.xml > "$EVIDENCE/prefs.xml" 2>&1 || true
 if [[ -s "$EVIDENCE/prefs.xml" ]] && ! grep -Fq "$TARGET" "$EVIDENCE/prefs.xml"; then fail "UI showed a target but target_package was not persisted"; fi
 
-capture_all "selection-flow-complete"
-printf 'FINAL_PRODUCTION_USER_FLOW_PASS\nTARGET_SELECTION_CONTROL=PASS\nTARGET_POPUP_POPULATED=PASS\nTARGET_SELECTION_REFLECTED=PASS\n' | tee "$EVIDENCE/PASS.txt"
+# Prove the selected target is not merely displayed. Resolve and launch the real
+# selected package, then prove Android actually put that target in the foreground.
+adbq shell cmd package resolve-activity --brief "$TARGET" > "$EVIDENCE/target-resolve.txt" 2>&1 || fail "Selected target package could not resolve a launch activity"
+if grep -Eq 'No activity found|priority=0.*No activity' "$EVIDENCE/target-resolve.txt"; then fail "Selected target has no resolvable launch activity"; fi
+adbq shell monkey -p "$TARGET" -c android.intent.category.LAUNCHER 1 > "$EVIDENCE/target-launch.txt" 2>&1 || fail "Selected target launch command failed"
+sleep 3
+FOCUS="$(adbq shell dumpsys activity activities | grep -m1 -E 'mResumedActivity|mCurrentFocus' || true)"
+printf '%s\n' "$FOCUS" > "$EVIDENCE/target-foreground.txt"
+grep -Fq "$TARGET" "$EVIDENCE/target-foreground.txt" || fail "Selected target was not brought to the real foreground"
+
+# Return to KUNAL Universal Video and prove the selection survives the real target
+# handoff. This catches a class of state-loss bugs invisible to component E2E.
+adbq shell am start -W -n "$PKG/.MainActivity" > "$EVIDENCE/return-to-controller.txt" 2>&1 || fail "Controller could not be restored after target handoff"
+sleep 2
+adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-after-target-handoff.xml" 2>"$EVIDENCE/ui-after-target-handoff.err" || fail "Post-handoff controller UI hierarchy unavailable"
+grep -Fq "$TARGET" "$EVIDENCE/ui-after-target-handoff.xml" || fail "Selected target was lost after target-app handoff"
+
+capture_all "selection-and-target-handoff-complete"
+printf 'FINAL_PRODUCTION_USER_FLOW_PASS\nTARGET_SELECTION_CONTROL=PASS\nTARGET_POPUP_POPULATED=PASS\nTARGET_SELECTION_REFLECTED=PASS\nTARGET_LAUNCH=PASS\nTARGET_FOREGROUND=PASS\nTARGET_HANDOFF_STATE=PASS\n' | tee "$EVIDENCE/PASS.txt"
