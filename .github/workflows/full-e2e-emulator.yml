@@ -67,8 +67,8 @@ jobs:
           api-level: 35
           arch: x86_64
           profile: pixel_2
-          emulator-options: -no-window -no-audio -no-boot-anim
-          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot-save
+          disable-animations: false
           script: bash .github/scripts/full-e2e-emulator.sh
 
       - name: Upload E2E evidence
