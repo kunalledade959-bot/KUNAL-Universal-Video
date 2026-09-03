@@ -57,21 +57,18 @@ sleep 4
 [[ -n "$(adbq shell pidof "$PKG" | tr -d '\r' || true)" ]] || fail "Application process not alive"
 
 adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-initial.xml" 2>"$EVIDENCE/ui-initial.err" || fail "Initial UI hierarchy unavailable"
-python3 - "$EVIDENCE/ui-initial.xml" <<'PY'
-import sys, xml.etree.ElementTree as ET
-root=ET.parse(sys.argv[1]).getroot()
-nodes=list(root.iter())
+python3 - "$EVIDENCE/ui-initial.xml" > "$EVIDENCE/spinner-center.txt" <<'PY'
+import sys,xml.etree.ElementTree as ET,re
+root=ET.parse(sys.argv[1]).getroot(); nodes=list(root.iter())
 sp=[n for n in nodes if n.attrib.get('class')=='android.widget.Spinner']
 if not sp: raise SystemExit('TARGET_SELECTION_CONTROL_MISSING')
 if not any('1 • START / DIAGNOSTIC' in n.attrib.get('text','') for n in nodes): raise SystemExit('STAGE1_CONTROL_MISSING')
-b=sp[0].attrib.get('bounds','')
-import re
-m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',b)
+m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',sp[0].attrib.get('bounds',''))
 if not m: raise SystemExit('TARGET_SELECTION_BOUNDS_INVALID')
-x1,y1,x2,y2=map(int,m.groups())
-print((x1+x2)//2,(y1+y2)//2)
+x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2)
 PY
-> "$EVIDENCE/spinner-center.txt" || fail "Production target-selection control is missing or malformed"
+STATUS=$?
+if [[ "$STATUS" != "0" ]]; then fail "Production target-selection control is missing or malformed (diagnostic=$STATUS)"; fi
 read -r X Y < "$EVIDENCE/spinner-center.txt"
 adbq shell input tap "$X" "$Y" || fail "Target selection control could not be opened"
 sleep 2
@@ -101,7 +98,9 @@ for n in root.iter():
             x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2); break
 else: raise SystemExit('TARGET_ROW_NOT_FOUND')
 PY
-read -r RX RY < "$EVIDENCE/target-center.txt" || fail "Selected target row is not represented in popup hierarchy"
+STATUS=$?
+if [[ "$STATUS" != "0" ]]; then fail "Selected target row is not represented in popup hierarchy (diagnostic=$STATUS)"; fi
+read -r RX RY < "$EVIDENCE/target-center.txt"
 adbq shell input tap "$RX" "$RY" || fail "Target row tap failed"
 sleep 2
 adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-after-selection.xml" 2>"$EVIDENCE/ui-after-selection.err" || fail "Post-selection UI hierarchy unavailable"
