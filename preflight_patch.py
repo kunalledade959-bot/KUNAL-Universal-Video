@@ -37,8 +37,21 @@ if activity.is_file():
     if old_stage3 not in a:
         raise SystemExit('STAGE ORDER FIX: Stage 3 target connection point not found')
     a=a.replace(old_stage3,new_stage3,1)
+
+    # Stage 10 completion repair: START is not PASS. The recording service finalizes asynchronously
+    # after STOP, so poll for the real MediaStore recording and only then close Stage 10.
+    old_record='''    private fun audioAndRecord(){\n        if(!begin(10))return\n        val text=prefs().getString(STORY,"")?:"";if(text.isBlank()){fail(10,"Story missing for narration");return}\n        val out=File(cacheDir,"narration_${sid}.wav");try{'''
+    new_record='''    private fun audioAndRecord(){\n        if(!begin(10))return\n        prefs().edit().remove(RECORDING).apply()\n        val text=prefs().getString(STORY,"")?:"";if(text.isBlank()){fail(10,"Story missing for narration");return}\n        val out=File(cacheDir,"narration_${sid}.wav");try{'''
+    if old_record not in a:
+        raise SystemExit('STAGE 10 FIX: audio start target not found')
+    a=a.replace(old_record,new_record,1)
+    old_stop='''    fun startRecordingFromBridge(){if(gate.isUnlocked(10))audioAndRecord()}\n    fun stopRecordingFromBridge(){startService(Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP))}\n\n    private fun latestRecording():android.net.Uri?{'''
+    new_stop='''    fun startRecordingFromBridge(){if(gate.isUnlocked(10))audioAndRecord()}\n    fun stopRecordingFromBridge(){\n        if(gate.state(10)!=StageGate.State.RUNNING)return\n        startService(Intent(this,ScreenCaptureService::class.java).setAction(ScreenCaptureService.STOP))\n        waitForRecordingCompletion(0)\n    }\n    private fun waitForRecordingCompletion(attempt:Int){\n        if(gate.state(10)!=StageGate.State.RUNNING)return\n        val uri=latestRecording()\n        if(uri!=null){\n            prefs().edit().putString(RECORDING,uri.toString()).apply()\n            pass(10,"Screen recording finalized: $uri")\n            return\n        }\n        if(attempt>=20){fail(10,"Recording stop completed but no finalized MediaStore video was found");return}\n        android.os.Handler(mainLooper).postDelayed({waitForRecordingCompletion(attempt+1)},500L)\n    }\n\n    private fun latestRecording():android.net.Uri?{'''
+    if old_stop not in a:
+        raise SystemExit('STAGE 10 FIX: recording stop target not found')
+    a=a.replace(old_stop,new_stop,1)
     activity.write_text(a,encoding='utf-8')
-    print('UI + STAGE ORDER FIX: PASS')
+    print('UI + STAGE ORDER + STAGE 10 FIX: PASS')
 else:
     raise SystemExit('UI FIX: activity_fixed.kt missing')
 
