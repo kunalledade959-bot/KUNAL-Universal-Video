@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """Top-1 production truth repair/audit cell.
 
-This cell repairs known deterministic defects once, then performs independent
-source-contract checks. It intentionally does not treat textual checks as
-runtime or physical-device proof. Kotlin syntax is validated by the real
-Android build, not by a brittle brace counter.
+Repairs deterministic defects in the source generators first, then audits the
+source that will actually feed the Android build. Textual checks never claim
+runtime or physical-device proof.
 """
 from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -134,8 +132,59 @@ def repair_activity() -> bool:
     return changed
 
 
+def repair_generator_bridge() -> bool:
+    s = read(REPAIR)
+    if not s:
+        raise RuntimeError("pro_repair_v3.py missing/empty")
+    old_connect = 'fun connect(t:String){target=t;UniversalAccessibilityService.targetPackage=t;connected.set(true);cb("REAL LOCAL SESSION CONNECTED")}'
+    new_connect = '''fun connect(t:String):Boolean{
+  if(!running.get())return false
+  if(!UniversalAccessibilityService.isEnabled || UniversalAccessibilityService.instance==null){connected.set(false);cb("Accessibility service is not bound");return false}
+  target=t;UniversalAccessibilityService.targetPackage=t
+  repeat(80){
+    try{
+      val h=java.net.URL("http://127.0.0.1:$PORT/health")
+      val hc=(h.openConnection() as java.net.HttpURLConnection).apply{connectTimeout=250;readTimeout=500;requestMethod="GET"}
+      val hb=hc.inputStream.bufferedReader().use{it.readText()};hc.disconnect()
+      val hj=JSONObject(hb)
+      if(!hj.optBoolean("ok") || hj.optString("protocol")!=ControllerProtocol.PROTOCOL || hj.optString("session_id")!=sessionId){throw IllegalStateException("health mismatch")}
+      val p=java.net.URL("http://127.0.0.1:$PORT/status")
+      val pc=(p.openConnection() as java.net.HttpURLConnection).apply{connectTimeout=250;readTimeout=500;requestMethod="GET"}
+      val pb=pc.inputStream.bufferedReader().use{it.readText()};pc.disconnect()
+      val sj=JSONObject(pb)
+      val bound=sj.optBoolean("service_bound",false)
+      if(sj.optBoolean("ok") && sj.optString("session_id")==sessionId && sj.optBoolean("accessibility") && bound){
+        val ps=java.net.URL("http://127.0.0.1:$PORT/status")
+        val sc=(ps.openConnection() as java.net.HttpURLConnection).apply{connectTimeout=250;readTimeout=500;requestMethod="POST";doOutput=true;setRequestProperty("Content-Type","application/json")}
+        sc.outputStream.use{it.write(JSONObject(mapOf("command" to ControllerProtocol.PING,"session_id" to sessionId,"target_package" to t)).toString().toByteArray(Charsets.UTF_8))}
+        val sb=sc.inputStream.bufferedReader().use{it.readText()};sc.disconnect()
+        val pj=JSONObject(sb)
+        if(pj.optBoolean("ok") && pj.optString("command")==ControllerProtocol.PONG && pj.optString("session_id")==sessionId){
+          connected.set(true);cb("REAL DEVICE CONTROL CHANNEL CONNECTED • HEALTH/STATUS/PING-PONG VERIFIED");return true
+        }
+      }
+    }catch(_:Exception){}
+    try{Thread.sleep(100)}catch(_:InterruptedException){Thread.currentThread().interrupt();break}
+  }
+  connected.set(false);cb("Controller handshake failed");return false
+}'''
+    changed = False
+    if old_connect in s:
+        s = s.replace(old_connect, new_connect, 1)
+        changed = True
+    old_status = 'JSONObject(mapOf("ok" to true,"session_id" to sessionId,"connected" to connected.get(),"target_package" to target,"accessibility" to UniversalAccessibilityService.isEnabled,"target_foreground" to UniversalAccessibilityService.targetForeground))'
+    new_status = 'JSONObject(mapOf("ok" to true,"session_id" to sessionId,"connected" to connected.get(),"target_package" to target,"accessibility" to UniversalAccessibilityService.isEnabled,"service_bound" to (UniversalAccessibilityService.instance!=null),"target_foreground" to UniversalAccessibilityService.targetForeground))'
+    if old_status in s:
+        s = s.replace(old_status, new_status, 1)
+        changed = True
+    if changed:
+        REPAIR.write_text(s.rstrip() + "\n", encoding="utf-8")
+    return changed
+
+
 repair_step("contract placeholder repair", repair_contract)
 repair_step("Stage 10 recording-finalization repair", repair_activity)
+repair_step("generator LocalBridge hardening", repair_generator_bridge)
 
 contract_text = read(CONTRACT)
 activity = read(ACTIVITY)
@@ -194,9 +243,21 @@ for sid, needles in checks_13.items():
     missing = [n for n in needles if n not in haystack]
     check(f"Stage {sid} source contract", not missing, "missing: " + ", ".join(missing))
 
-stage2_needles = ["connectMobile()","System.currentTimeMillis()+8000","/health","/status","ControllerProtocol.PING","PONG","session_id","service_bound"]
+stage2_needles = [
+    "connect(t:String):Boolean",
+    "System.currentTimeMillis()+8000",
+    "/health",
+    "/status",
+    "ControllerProtocol.PING",
+    "ControllerProtocol.PONG",
+    "session_id",
+    "service_bound",
+    "UniversalAccessibilityService.instance==null",
+]
 missing2 = [n for n in stage2_needles if n not in source_truth]
 check("Stage 2 bridge protocol contract", not missing2, "missing: " + ", ".join(missing2))
+check("Stage 2 generator is not weak", "connected.set(true);cb(\"REAL LOCAL SESSION CONNECTED\")" not in repair, "legacy weak connect remains in generator")
+check("Stage 2 status exposes binding", '"service_bound" to (UniversalAccessibilityService.instance!=null)' in repair, "missing service_bound")
 
 for label, pattern in {
     "silent scene truncation": r"\.take\(30\)",
@@ -215,9 +276,6 @@ check("Stage 10 recording size/mime proof", "MediaStore.Video.Media.SIZE" in act
 check("no direct PASS mutation", re.search(r"state\s*=\s*StageGate\.State\.PASS", activity) is None, "direct mutation found")
 check("release remains fail-closed", "real-device verification" in contract.get("release_rule", "") and "emulator-only PASS is never sufficient" in contract.get("release_rule", ""), "release rule weakened")
 check("Python repair scripts compile-shape", all(read(p).strip() for p in (REPAIR, AUDIT)), "required script empty")
-
-# The actual Kotlin compiler/build is the syntax authority. This cell only checks
-# that the generated source is present; it deliberately does not invent a parser.
 check("generated Kotlin source present", bool(activity.strip()), "activity_fixed.kt missing/empty")
 
 report = {
