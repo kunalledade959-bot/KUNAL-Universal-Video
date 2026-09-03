@@ -2,9 +2,21 @@ name: Root Cause Diagnostic
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '*.py'
+      - '*.kt'
+      - '.github/scripts/**'
+      - '.github/workflows/full-e2e-emulator.yml'
+      - '.github/workflows/final-production-user-flow.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: root-cause-diagnostic-main
+  cancel-in-progress: false
 
 jobs:
   diagnostic:
