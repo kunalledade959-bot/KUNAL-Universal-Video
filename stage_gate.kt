@@ -70,6 +70,7 @@ class StageGate(context: Context) {
         if (!valid(id)) return false
         if (id > 1 && stages[id - 2].state != State.PASS) return false
         val current = stages[id - 1].state
+        // Stage 1 has no predecessor, so its FAIL state is also repairable.
         if (current != State.FAIL && !(id == 1 && current == State.LOCKED)) return false
         stages[id - 1].state = State.READY
         stages[id - 1].evidence = ""
