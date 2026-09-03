@@ -1,0 +1,110 @@
+name: Final Production User Flow Gate
+
+on:
+  workflow_run:
+    workflows:
+      - Full E2E Emulator Gate
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-universal-video-final-user-flow-main
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  final-user-flow:
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Checkout exact upstream E2E commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+
+      - name: Reproduce production APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 preflight_patch.py
+          python3 constructor_lifecycle_patch.py
+          python3 stage11_hardening_v2.py
+          python3 pro_repair_v3.py
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+
+      - name: Create deterministic fresh emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          mkdir -p "$ANDROID_AVD_HOME"
+          adb kill-server || true
+          adb start-server
+          rm -rf "$ANDROID_AVD_HOME/final-user-flow.avd" "$ANDROID_AVD_HOME/final-user-flow.ini"
+          printf 'no\n' | avdmanager create avd --force -n final-user-flow --package 'system-images;android-35;default;x86_64' --device 'pixel_2' > avd-create.log 2>&1
+          printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/final-user-flow.avd/config.ini"
+          emulator -avd final-user-flow -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off > final-user-flow-emulator.log 2>&1 &
+          echo $! > final-user-flow-emulator.pid
+          deadline=$((SECONDS+900))
+          while (( SECONDS < deadline )); do
+            if ! kill -0 "$(cat final-user-flow-emulator.pid)" 2>/dev/null; then
+              tail -n 1200 final-user-flow-emulator.log || true
+              exit 1
+            fi
+            if adb -s emulator-5554 get-state 2>/dev/null | grep -q '^device$' && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == '1' ]]; then
+              break
+            fi
+            sleep 3
+          done
+          [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" == '1' ]]
+
+      - name: Run final production user-flow gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/final-production-user-flow.sh
+
+      - name: Upload final user-flow root-cause bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-final-user-flow-evidence
+          path: |
+            final-user-flow-evidence/
+            artifact/
+            avd-create.log
+            final-user-flow-emulator.log
+          if-no-files-found: warn
+          retention-days: 14
