@@ -6,6 +6,17 @@ on:
       - Full E2E Emulator Gate
     types: [completed]
     branches: [main]
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/final-production-user-flow.yml"
+      - ".github/scripts/final-production-user-flow.sh"
+      - "*.zip"
+      - "activity_fixed.kt"
+      - "pro_repair_v3.py"
+      - "preflight_patch.py"
+      - "constructor_lifecycle_patch.py"
+      - "stage11_hardening_v2.py"
   workflow_dispatch:
 
 concurrency:
@@ -17,7 +28,7 @@ permissions:
 
 jobs:
   final-user-flow:
-    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
