@@ -12,7 +12,9 @@ on:
       - "stage11_hardening_v2.py"
       - ".github/scripts/full-e2e-emulator.sh"
       - ".github/scripts/self-healing-gate.sh"
+      - ".github/scripts/final-production-user-flow.sh"
       - ".github/workflows/full-e2e-emulator.yml"
+      - ".github/workflows/final-production-user-flow.yml"
   workflow_dispatch:
 
 concurrency:
