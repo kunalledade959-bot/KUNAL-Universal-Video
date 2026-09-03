@@ -12,6 +12,10 @@ on:
       - ".github/scripts/emulator-smoke.sh"
       - ".github/workflows/main.yml"
 
+concurrency:
+  group: kunal-universal-video-build-main
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
