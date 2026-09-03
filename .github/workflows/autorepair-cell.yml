@@ -3,7 +3,8 @@ name: KUNAL AutoRepair Cell
 on:
   push:
     branches: [main]
-    paths: [.github/AUTOREPAIR_NOW]
+    paths:
+      - .github/AUTOREPAIR_NOW
   workflow_dispatch:
 
 concurrency:
@@ -41,82 +42,212 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install Android SDK
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
 
       - name: Install Copilot CLI
-        run: npm install -g @github/copilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version
 
-      - name: Iterative root-cause repair
+      - name: Iterative evidence-driven root-cause repair
         env:
           GITHUB_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -u -o pipefail
-          mkdir -p autorepair-evidence/iterations
-          MAX_ITERATIONS=8
-          PASS=0
-          for ITERATION in $(seq 1 "$MAX_ITERATIONS"); do
-            E="autorepair-evidence/iterations/$ITERATION"
-            mkdir -p "$E"
-            echo "=== AUTOREPAIR ITERATION $ITERATION ===" | tee "$E/iteration.log"
-            gh run list --branch main --status failure --limit 8 --json databaseId,name,headSha,createdAt,conclusion > "$E/recent-failures.json" 2>&1 || true
-            git status --short > "$E/git-status-before.txt" 2>&1 || true
-            git diff --check > "$E/git-diff-check-before.txt" 2>&1 || true
 
-            set +e
-            copilot --autopilot --yolo --max-autopilot-continues 12 -p "
-            You are the senior production Android engineer for KUNAL Universal Video.
-            This is autorepair iteration $ITERATION. Fix EXACTLY ONE highest-confidence,
-            evidence-backed root cause in this iteration, then stop. Do not bundle unrelated
-            speculative fixes. First inspect all autorepair-evidence, recent workflow failures,
-            current git diff, production ZIP, activity_fixed.kt, StageGate, every repair script,
-            self-healing-gate.sh, full-e2e-emulator.sh and final-production-user-flow.sh.
+          ROOT_LIMIT=8
+          STRATEGY_LIMIT=3
+          ROOTS_CLOSED=0
+          mkdir -p autorepair-evidence/roots
 
-            Trace the failure from the first proven cause to the visible symptom. Distinguish
-            app defects from emulator/SystemUI/ADB defects. If infrastructure is the root,
-            repair infrastructure. If app behavior is the root, repair the product source.
-            Never patch an assertion merely to make it pass.
+          collect_state() {
+            local out="$1"
+            mkdir -p "$out"
+            git status --short > "$out/git-status.txt" 2>&1 || true
+            git diff --check > "$out/git-diff-check.txt" 2>&1 || true
+            git log -1 --format='%H%n%s' > "$out/head.txt" 2>&1 || true
+            gh run list --branch main --limit 12 --json databaseId,name,headSha,createdAt,status,conclusion > "$out/recent-runs.json" 2>&1 || true
+          }
 
-            Quality bar: production-grade, deterministic, idempotent, minimal and robust.
-            Never weaken, delete, skip or bypass tests. Never fake PASS or manufacture evidence.
-            Never touch secrets. Preserve the 13-stage architecture and all real target-control,
-            Accessibility, MediaProjection, TTS/audio, assembly, verification and gallery behavior.
-
-            After the ONE root-cause fix, run appropriate static checks and write
-            autorepair-evidence/iterations/$ITERATION/repair.md with the root cause, evidence,
-            changed files, why the fix is correct, and the remaining blocker for the next iteration.
-            " > "$E/copilot.log" 2>&1
-            COPILOT_STATUS=$?
-            set -e
-            echo "COPILOT_STATUS=$COPILOT_STATUS" > "$E/result.txt"
-            git diff --check > "$E/git-diff-check-after.txt" 2>&1 || true
-            git status --short > "$E/git-status-after.txt" 2>&1 || true
-            if [[ "$COPILOT_STATUS" != "0" ]]; then
-              echo "AUTOREPAIR_AGENT_FAILED" | tee -a "$E/result.txt"
-              exit 20
-            fi
-
+          run_authoritative_gate() {
+            local out="$1"
             rm -f e2e-PASS.txt
             set +e
-            bash .github/scripts/self-healing-gate.sh > "$E/self-healing-gate.log" 2>&1
-            GATE_STATUS=$?
+            bash .github/scripts/self-healing-gate.sh > "$out/self-healing-gate.log" 2>&1
+            local status=$?
             set -e
-            echo "SELF_HEALING_GATE_STATUS=$GATE_STATUS" >> "$E/result.txt"
-            cp e2e-*.txt "$E/" 2>/dev/null || true
-            cp e2e-*.xml "$E/" 2>/dev/null || true
-            cp e2e-*.log "$E/" 2>/dev/null || true
-            if [[ "$GATE_STATUS" == "0" && -f e2e-PASS.txt ]]; then
-              echo "FULL_E2E_ROOT_GATE_PASS" | tee -a "$E/result.txt"
-              PASS=1
+            printf '%s\n' "$status" > "$out/gate-exit-code.txt"
+            cp e2e-*.txt "$out/" 2>/dev/null || true
+            cp e2e-*.xml "$out/" 2>/dev/null || true
+            cp e2e-*.log "$out/" 2>/dev/null || true
+            return "$status"
+          }
+
+          run_final_user_flow() {
+            local out="$1"
+            if [[ ! -x .github/scripts/final-production-user-flow.sh ]]; then
+              chmod +x .github/scripts/final-production-user-flow.sh
+            fi
+            set +e
+            bash .github/scripts/final-production-user-flow.sh > "$out/final-production-user-flow.log" 2>&1
+            local status=$?
+            set -e
+            printf '%s\n' "$status" > "$out/final-flow-exit-code.txt"
+            cp FINAL_PRODUCTION_USER_FLOW_*.txt "$out/" 2>/dev/null || true
+            return "$status"
+          }
+
+          for ROOT in $(seq 1 "$ROOT_LIMIT"); do
+            ROOT_DIR="autorepair-evidence/roots/$ROOT"
+            mkdir -p "$ROOT_DIR"
+            collect_state "$ROOT_DIR/before"
+
+            BASE_SHA="$(git rev-parse HEAD)"
+            printf '%s\n' "$BASE_SHA" > "$ROOT_DIR/base-sha.txt"
+            ROOT_CLOSED=0
+
+            for STRATEGY in $(seq 1 "$STRATEGY_LIMIT"); do
+              STRATEGY_DIR="$ROOT_DIR/strategy-$STRATEGY"
+              mkdir -p "$STRATEGY_DIR"
+              printf 'ROOT=%s\nSTRATEGY=%s\nBASE_SHA=%s\n' "$ROOT" "$STRATEGY" "$BASE_SHA" > "$STRATEGY_DIR/context.txt"
+
+              if [[ "$STRATEGY" -gt 1 ]]; then
+                PREV="$ROOT_DIR/strategy-$((STRATEGY-1))"
+                if [[ -f "$PREV/gate-exit-code.txt" ]]; then
+                  cp "$PREV/gate-exit-code.txt" "$STRATEGY_DIR/previous-gate-exit-code.txt"
+                fi
+                if [[ -f "$PREV/self-healing-gate.log" ]]; then
+                  cp "$PREV/self-healing-gate.log" "$STRATEGY_DIR/previous-gate.log"
+                fi
+                if [[ -f "$PREV/strategy.md" ]]; then
+                  cp "$PREV/strategy.md" "$STRATEGY_DIR/previous-strategy.md"
+                fi
+              fi
+
+              # Every alternative starts from the last known-good checkpoint. Failed experiments
+              # are never allowed to contaminate the next strategy.
+              git reset --hard "$BASE_SHA" >/dev/null
+              collect_state "$STRATEGY_DIR/pre-repair"
+
+              set +e
+              copilot --autopilot --yolo --max-autopilot-continues 16 -p "
+              You are the senior production Android repair engineer for KUNAL Universal Video.
+
+              ROOT-CAUSE AUTOREPAIR CONTRACT
+              This is root-cause cycle $ROOT, strategy $STRATEGY of $STRATEGY_LIMIT.
+              Solve exactly ONE highest-confidence, evidence-backed root cause in this cycle.
+              The goal is a production-grade fix, not a green CI result.
+
+              FIRST: inspect all available evidence under autorepair-evidence/roots/$ROOT,
+              current repository state, recent workflow failures, production ZIP, activity_fixed.kt,
+              StageGate, every repair script, self-healing-gate.sh, full-e2e-emulator.sh and
+              final-production-user-flow.sh. Trace the failure from first proven cause to the
+              user-visible symptom. Distinguish app defects from emulator/SystemUI/ADB defects.
+
+              STRATEGY RULES
+              - Strategy 1 must be the highest-confidence correct mechanism supported by evidence.
+              - If strategy 1 did not close the root cause, strategy 2 MUST be materially different,
+                evidence-backed, and must explicitly explain why strategy 1 was insufficient.
+              - If strategy 2 did not close it, strategy 3 MUST again be materially different,
+                evidence-backed, and must explain why the previous mechanisms were insufficient.
+              - NEVER repeat a failed strategy with cosmetic changes.
+              - NEVER invent a new approach merely because it is different. Rank candidate mechanisms
+                by evidence, Android lifecycle correctness, determinism, failure isolation and
+                production maintainability, then choose the strongest remaining one.
+              - If evidence proves the problem is infrastructure, repair infrastructure. If it proves
+                an app defect, repair the app. Do not compensate for a broken emulator inside the app.
+
+              QUALITY GATE
+              - Production-grade, deterministic, idempotent and maintainable only.
+              - Never weaken, delete, skip, bypass or rewrite an assertion to make it pass.
+              - Never manufacture e2e-PASS.txt or any PASS marker.
+              - Never hide an error with || true unless the operation is explicitly diagnostic-only
+                and its failure cannot invalidate the gate.
+              - Preserve the 13-stage architecture and all real target-control, Accessibility,
+                MediaProjection, TTS/audio, assembly, verification and gallery behavior.
+              - Do not touch secrets or credentials.
+              - Do not commit or push. The controller owns checkpoints and publishing.
+
+              REPAIR OUTPUT
+              Make only the changes required for this ONE root cause. Run relevant static checks.
+              Write autorepair-evidence/roots/$ROOT/strategy-$STRATEGY/strategy.md containing:
+              1. proven root cause and exact evidence,
+              2. candidate strategies considered and why the selected one ranked highest,
+              3. exact changed files and mechanism,
+              4. static/build checks executed,
+              5. what must be verified by the authoritative gate,
+              6. if this is an alternative strategy, why every prior strategy failed.
+              " > "$STRATEGY_DIR/copilot.log" 2>&1
+              COPILOT_STATUS=$?
+              set -e
+              printf '%s\n' "$COPILOT_STATUS" > "$STRATEGY_DIR/copilot-exit-code.txt"
+
+              if [[ "$COPILOT_STATUS" != "0" ]]; then
+                echo 'AUTOREPAIR_AGENT_FAILED' | tee "$STRATEGY_DIR/result.txt"
+                echo "Copilot exit code: $COPILOT_STATUS" >> "$STRATEGY_DIR/result.txt"
+                git reset --hard "$BASE_SHA" >/dev/null
+                break
+              fi
+
+              git diff --check > "$STRATEGY_DIR/git-diff-check-after-repair.txt" 2>&1
+              git status --short > "$STRATEGY_DIR/git-status-after-repair.txt" 2>&1
+
+              if ! run_authoritative_gate "$STRATEGY_DIR"; then
+                echo 'ROOT_NOT_CLOSED_BY_FULL_E2E' | tee "$STRATEGY_DIR/result.txt"
+                # Preserve the failure evidence, then revert the failed experiment before
+                # selecting an alternative mechanism for the same root cause.
+                git diff > "$STRATEGY_DIR/failed-repair.diff" || true
+                git reset --hard "$BASE_SHA" >/dev/null
+                continue
+              fi
+
+              # Full E2E is necessary but not sufficient. The final production user flow must
+              # also prove the visible target-selection -> target-launch -> return-to-app path.
+              if ! run_final_user_flow "$STRATEGY_DIR"; then
+                echo 'ROOT_NOT_CLOSED_BY_FINAL_USER_FLOW' | tee "$STRATEGY_DIR/result.txt"
+                git diff > "$STRATEGY_DIR/failed-final-flow-repair.diff" || true
+                git reset --hard "$BASE_SHA" >/dev/null
+                continue
+              fi
+
+              echo 'ROOT_CAUSE_CLOSED_AND_PRODUCTION_USER_FLOW_VERIFIED' | tee "$STRATEGY_DIR/result.txt"
+              git diff --check
+              git status --short > "$STRATEGY_DIR/final-git-status.txt"
+
+              # Create a local checkpoint only after both authoritative gates pass. It is not
+              # pushed until the entire repair session has completed successfully.
+              git add -A
+              git commit -m "fix: close autorepair root cause $ROOT" >/dev/null
+              ROOT_CLOSED=1
+              ROOTS_CLOSED=$((ROOTS_CLOSED + 1))
+              break
+            done
+
+            if [[ "$ROOT_CLOSED" != "1" ]]; then
+              echo "AUTOREPAIR_EXHAUSTED_AT_ROOT=$ROOT" | tee autorepair-evidence/AUTOREPAIR_EXHAUSTED.txt
+              exit 1
+            fi
+
+            # A full gate pass means the current product state is verified. Stop rather than
+            # inventing more work. Any new failure will create a new evidence-backed cycle.
+            if [[ -f e2e-PASS.txt ]]; then
+              echo "AUTOREPAIR_VERIFIED_PASS_AFTER_ROOT=$ROOT" | tee autorepair-evidence/VERIFIED_PASS.txt
               break
             fi
-            echo "ROOT_CAUSE_NOT_YET_CLOSED" | tee -a "$E/result.txt"
           done
-          [[ "$PASS" == "1" ]] || { echo 'AUTOREPAIR_EXHAUSTED'; exit 1; }
 
-      - name: Publish only after verified root gate
+          [[ -f e2e-PASS.txt ]] || { echo 'AUTOREPAIR_NO_VERIFIED_PASS'; exit 1; }
+          git diff --check
+          git status --short
+
+      - name: Final integrity and publish
         if: success()
         shell: bash
         run: |
@@ -127,17 +258,19 @@ jobs:
           git diff --check
           git config user.name 'kunalledade959-bot'
           git config user.email 'kunalledade959-bot@users.noreply.github.com'
-          git add KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip activity_fixed.kt stage11_hardening_v2.py preflight_patch.py constructor_lifecycle_patch.py pro_repair_v3.py .github/scripts .github/workflows autorepair-evidence
-          if ! git diff --cached --quiet; then
-            git commit -m 'fix: complete iterative autorepair with verified root gate'
-            git push origin main
-          fi
+          git push origin HEAD:main
 
       - name: Upload autorepair evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: KUNAL-Universal-Video-autorepair-evidence
-          path: autorepair-evidence/
+          path: |
+            autorepair-evidence/
+            e2e-*.txt
+            e2e-*.log
+            e2e-*.xml
+            e2e-*.json
+            avd-create.log
           if-no-files-found: ignore
           retention-days: 14
