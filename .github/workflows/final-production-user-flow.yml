@@ -14,6 +14,7 @@ on:
       - "*.zip"
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
+      - "pro_repair_v4.py"
       - "preflight_patch.py"
       - "constructor_lifecycle_patch.py"
       - "stage11_hardening_v2.py"
@@ -63,37 +64,22 @@ jobs:
           SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
           [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
           [[ -x "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND" >&2; exit 1; }
-
           set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
           LICENSE_STATUS=${PIPESTATUS[1]}
           set -o pipefail
           [[ "$LICENSE_STATUS" == "0" ]] || { echo "SDK_LICENSE_ACCEPTANCE_FAILED=$LICENSE_STATUS" >&2; exit "$LICENSE_STATUS"; }
-
-          packages=(
-            "platform-tools"
-            "platforms;android-35"
-            "build-tools;35.0.0"
-            "emulator"
-            "system-images;android-35;default;x86_64"
-          )
+          packages=("platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64")
           for attempt in 1 2 3; do
             echo "SDK_COMPONENT_INSTALL_ATTEMPT=$attempt"
-            if "$SDKMANAGER" --install "${packages[@]}"; then
-              echo "SDK_COMPONENT_INSTALL=PASS"
-              exit 0
-            fi
+            if "$SDKMANAGER" --install "${packages[@]}"; then echo "SDK_COMPONENT_INSTALL=PASS"; exit 0; fi
             echo "SDK_COMPONENT_INSTALL_ATTEMPT=$attempt FAILED" >&2
-            if (( attempt < 3 )); then
-              rm -rf "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.temp" \
-                     "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.downloadIntermediates" || true
-              sleep 5
-            fi
+            if (( attempt < 3 )); then rm -rf "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.temp" "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.downloadIntermediates" || true; sleep 5; fi
           done
           echo "SDK_COMPONENT_INSTALL=FAIL" >&2
           exit 1
 
-      - name: Reproduce production APK
+      - name: Reproduce production APK with canonical V4 builder
         shell: bash
         run: |
           set -euo pipefail
@@ -101,7 +87,7 @@ jobs:
           python3 preflight_patch.py
           python3 constructor_lifecycle_patch.py
           python3 stage11_hardening_v2.py
-          python3 pro_repair_v3.py
+          python3 pro_repair_v4.py
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
@@ -125,13 +111,8 @@ jobs:
           echo $! > final-user-flow-emulator.pid
           deadline=$((SECONDS+900))
           while (( SECONDS < deadline )); do
-            if ! kill -0 "$(cat final-user-flow-emulator.pid)" 2>/dev/null; then
-              tail -n 1200 final-user-flow-emulator.log || true
-              exit 1
-            fi
-            if adb -s emulator-5554 get-state 2>/dev/null | grep -q '^device$' && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == '1' ]]; then
-              break
-            fi
+            if ! kill -0 "$(cat final-user-flow-emulator.pid)" 2>/dev/null; then tail -n 1200 final-user-flow-emulator.log || true; exit 1; fi
+            if adb -s emulator-5554 get-state 2>/dev/null | grep -q '^device$' && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == '1' ]]; then break; fi
             sleep 3
           done
           [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" == '1' ]]
