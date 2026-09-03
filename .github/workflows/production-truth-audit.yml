@@ -32,7 +32,8 @@ jobs:
           set +e
           python3 .github/scripts/production_truth_audit.py | tee production-truth-audit.json
           rc=${PIPESTATUS[0]}
-          echo "AUDIT_EXIT_CODE=$rc" | tee -a production-truth-audit.json
+          printf '%s\n' "$rc" > production-truth-audit.exit_code
+          echo "AUDIT_EXIT_CODE=$rc" | tee production-truth-audit-status.txt
           exit 0
 
       - name: Collect exact root-cause report
@@ -47,7 +48,12 @@ jobs:
           except Exception as exc:
               audit = {}
               print(f'AUDIT_JSON_PARSE_ERROR={type(exc).__name__}: {exc}')
+          try:
+              audit_rc = Path('production-truth-audit.exit_code').read_text(encoding='utf-8').strip()
+          except Exception:
+              audit_rc = 'UNKNOWN'
           print('=== KUNAL UNIVERSAL VIDEO ROOT-CAUSE REPORT ===')
+          print(f'audit_process_exit_code={audit_rc}')
           for key in ('static_contract_pass','runtime_pass','real_device_pass','release_pass'):
               print(f'{key}={audit.get(key)}')
           errors = audit.get('errors', [])
@@ -70,6 +76,8 @@ jobs:
           name: production-truth-complete-evidence
           path: |
             production-truth-audit.json
+            production-truth-audit.exit_code
+            production-truth-audit-status.txt
             production-truth-pipeline.log
             production-truth-root-cause-report.txt
             production-truth-logs/
