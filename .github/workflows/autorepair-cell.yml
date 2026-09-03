@@ -1,0 +1,143 @@
+name: KUNAL AutoRepair Cell
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/AUTOREPAIR_NOW]
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-universal-video-autorepair-cell
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+  copilot-requests: write
+
+jobs:
+  autorepair:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Iterative root-cause repair
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -u -o pipefail
+          mkdir -p autorepair-evidence/iterations
+          MAX_ITERATIONS=8
+          PASS=0
+          for ITERATION in $(seq 1 "$MAX_ITERATIONS"); do
+            E="autorepair-evidence/iterations/$ITERATION"
+            mkdir -p "$E"
+            echo "=== AUTOREPAIR ITERATION $ITERATION ===" | tee "$E/iteration.log"
+            gh run list --branch main --status failure --limit 8 --json databaseId,name,headSha,createdAt,conclusion > "$E/recent-failures.json" 2>&1 || true
+            git status --short > "$E/git-status-before.txt" 2>&1 || true
+            git diff --check > "$E/git-diff-check-before.txt" 2>&1 || true
+
+            set +e
+            copilot --autopilot --yolo --max-autopilot-continues 12 -p "
+            You are the senior production Android engineer for KUNAL Universal Video.
+            This is autorepair iteration $ITERATION. Fix EXACTLY ONE highest-confidence,
+            evidence-backed root cause in this iteration, then stop. Do not bundle unrelated
+            speculative fixes. First inspect all autorepair-evidence, recent workflow failures,
+            current git diff, production ZIP, activity_fixed.kt, StageGate, every repair script,
+            self-healing-gate.sh, full-e2e-emulator.sh and final-production-user-flow.sh.
+
+            Trace the failure from the first proven cause to the visible symptom. Distinguish
+            app defects from emulator/SystemUI/ADB defects. If infrastructure is the root,
+            repair infrastructure. If app behavior is the root, repair the product source.
+            Never patch an assertion merely to make it pass.
+
+            Quality bar: production-grade, deterministic, idempotent, minimal and robust.
+            Never weaken, delete, skip or bypass tests. Never fake PASS or manufacture evidence.
+            Never touch secrets. Preserve the 13-stage architecture and all real target-control,
+            Accessibility, MediaProjection, TTS/audio, assembly, verification and gallery behavior.
+
+            After the ONE root-cause fix, run appropriate static checks and write
+            autorepair-evidence/iterations/$ITERATION/repair.md with the root cause, evidence,
+            changed files, why the fix is correct, and the remaining blocker for the next iteration.
+            " > "$E/copilot.log" 2>&1
+            COPILOT_STATUS=$?
+            set -e
+            echo "COPILOT_STATUS=$COPILOT_STATUS" > "$E/result.txt"
+            git diff --check > "$E/git-diff-check-after.txt" 2>&1 || true
+            git status --short > "$E/git-status-after.txt" 2>&1 || true
+            if [[ "$COPILOT_STATUS" != "0" ]]; then
+              echo "AUTOREPAIR_AGENT_FAILED" | tee -a "$E/result.txt"
+              exit 20
+            fi
+
+            rm -f e2e-PASS.txt
+            set +e
+            bash .github/scripts/self-healing-gate.sh > "$E/self-healing-gate.log" 2>&1
+            GATE_STATUS=$?
+            set -e
+            echo "SELF_HEALING_GATE_STATUS=$GATE_STATUS" >> "$E/result.txt"
+            cp e2e-*.txt "$E/" 2>/dev/null || true
+            cp e2e-*.xml "$E/" 2>/dev/null || true
+            cp e2e-*.log "$E/" 2>/dev/null || true
+            if [[ "$GATE_STATUS" == "0" && -f e2e-PASS.txt ]]; then
+              echo "FULL_E2E_ROOT_GATE_PASS" | tee -a "$E/result.txt"
+              PASS=1
+              break
+            fi
+            echo "ROOT_CAUSE_NOT_YET_CLOSED" | tee -a "$E/result.txt"
+          done
+          [[ "$PASS" == "1" ]] || { echo 'AUTOREPAIR_EXHAUSTED'; exit 1; }
+
+      - name: Publish only after verified root gate
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip
+          test -s e2e-PASS.txt
+          grep -q 'PASS' e2e-PASS.txt
+          git diff --check
+          git config user.name 'kunalledade959-bot'
+          git config user.email 'kunalledade959-bot@users.noreply.github.com'
+          git add KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip activity_fixed.kt stage11_hardening_v2.py preflight_patch.py constructor_lifecycle_patch.py pro_repair_v3.py .github/scripts .github/workflows autorepair-evidence
+          if ! git diff --cached --quiet; then
+            git commit -m 'fix: complete iterative autorepair with verified root gate'
+            git push origin main
+          fi
+
+      - name: Upload autorepair evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-autorepair-evidence
+          path: autorepair-evidence/
+          if-no-files-found: ignore
+          retention-days: 14
