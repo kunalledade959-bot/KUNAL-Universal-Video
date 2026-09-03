@@ -7,6 +7,7 @@ on:
       - "*.zip"
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
+      - "pro_repair_v4.py"
       - "preflight_patch.py"
       - "constructor_lifecycle_patch.py"
       - "stage11_hardening_v2.py"
@@ -47,17 +48,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-
-          # ubuntu-24.04 GitHub-hosted runners already contain the Android SDK.
-          # Do not download/replace the command-line tools here: that action has
-          # been the failing boundary in the real E2E run. Prefer an existing,
-          # executable sdkmanager and fail closed if the runner image lacks one.
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           if [[ -z "$SDK_ROOT" ]]; then
-            for candidate in \
-              "$HOME/Android/Sdk" \
-              "/usr/local/lib/android/sdk" \
-              "/opt/android-sdk"; do
+            for candidate in "$HOME/Android/Sdk" "/usr/local/lib/android/sdk" "/opt/android-sdk"; do
               if [[ -d "$candidate" ]]; then SDK_ROOT="$candidate"; break; fi
             done
           fi
@@ -79,9 +72,6 @@ jobs:
           [[ -n "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND" >&2; exit 1; }
           echo "SDKMANAGER=$SDKMANAGER"
           "$SDKMANAGER" --version
-
-          # License acceptance is intentionally pipefail-safe because `yes`
-          # normally exits through SIGPIPE once sdkmanager has enough input.
           set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
           LICENSE_STATUS=${PIPESTATUS[1]}
@@ -89,8 +79,7 @@ jobs:
           [[ "$LICENSE_STATUS" == "0" ]] || { echo "SDK_LICENSE_ACCEPTANCE_FAILED=$LICENSE_STATUS" >&2; exit "$LICENSE_STATUS"; }
 
           install_package() {
-            local pkg="$1"
-            local attempt
+            local pkg="$1" attempt
             for attempt in 1 2 3 4; do
               echo "SDK_PACKAGE=$pkg ATTEMPT=$attempt"
               if "$SDKMANAGER" --install "$pkg"; then
@@ -104,13 +93,11 @@ jobs:
             echo "SDK_PACKAGE=$pkg FAIL" >&2
             return 1
           }
-
           install_package "platform-tools"
           install_package "platforms;android-35"
           install_package "build-tools;35.0.0"
           install_package "emulator"
           install_package "system-images;android-35;default;x86_64"
-
           test -x "$SDK_ROOT/platform-tools/adb"
           test -x "$SDK_ROOT/emulator/emulator"
           test -f "$SDK_ROOT/platforms/android-35/android.jar"
@@ -137,5 +124,3 @@ jobs:
             avd-create.log
             KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           if-no-files-found: warn
-
-# Manual verification trigger: keep E2E gate runnable from Actions UI.
