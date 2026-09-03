@@ -2,7 +2,6 @@
 # Do not use set -e here. Every independent truth check must finish and print its
 # complete log before the pipeline returns its final status.
 set -uo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
 LOG_DIR="$ROOT/production-truth-logs"
@@ -10,48 +9,24 @@ mkdir -p "$LOG_DIR"
 : > "$LOG_DIR/00-combined.log"
 TOTAL=0
 FAILED=0
-
 run_step() {
-  local name="$1"; shift
-  TOTAL=$((TOTAL + 1))
-  local safe
-  safe="$(printf '%s' "$name" | tr ' /' '__' | tr -cd '[:alnum:]_.-')"
+  local name="$1"; shift; TOTAL=$((TOTAL + 1))
+  local safe; safe="$(printf '%s' "$name" | tr ' /' '__' | tr -cd '[:alnum:]_.-')"
   local log="$LOG_DIR/${TOTAL}-${safe}.log"
-  echo
-  echo "============================================================"
-  echo "PRODUCTION TRUTH CELL ${TOTAL}: ${name}"
-  echo "============================================================"
-  {
-    echo "CELL=${TOTAL}"
-    echo "NAME=${name}"
-    echo "COMMAND=$*"
-    echo "START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo
-  } | tee "$log" -a "$LOG_DIR/00-combined.log"
-
-  set +e
-  "$@" 2>&1 | tee -a "$log" "$LOG_DIR/00-combined.log"
-  local rc=${PIPESTATUS[0]}
-  set -e
-
-  {
-    echo
-    echo "END=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    echo "EXIT_CODE=${rc}"
-  } | tee -a "$log" "$LOG_DIR/00-combined.log"
-
-  if [[ "$rc" -ne 0 ]]; then
-    FAILED=$((FAILED + 1))
-    echo "CELL ${TOTAL} RESULT=FAIL exit=${rc}"
-  else
-    echo "CELL ${TOTAL} RESULT=PASS"
-  fi
+  echo; echo "============================================================"; echo "PRODUCTION TRUTH CELL ${TOTAL}: ${name}"; echo "============================================================"
+  { echo "CELL=${TOTAL}"; echo "NAME=${name}"; echo "COMMAND=$*"; echo "START=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo; } | tee "$log" -a "$LOG_DIR/00-combined.log"
+  set +e; "$@" 2>&1 | tee -a "$log" "$LOG_DIR/00-combined.log"; local rc=${PIPESTATUS[0]}; set -e
+  { echo; echo "END=$(date -u +%Y-%m-%dT%H:%M:%SZ)"; echo "EXIT_CODE=${rc}"; } | tee -a "$log" "$LOG_DIR/00-combined.log"
+  if [[ "$rc" -ne 0 ]]; then FAILED=$((FAILED + 1)); echo "CELL ${TOTAL} RESULT=FAIL exit=${rc}"; else echo "CELL ${TOTAL} RESULT=PASS"; fi
   return 0
 }
 
-# Transform the source first. The top-1 exhaustive cell must audit the FINAL
-# generated/patched source, not the pre-codegen template. It also repairs the
-# remaining known contract/runtime defects before the independent audit cells.
+# Canonical top-1 selection gate. It only admits repository-native components
+# that are present and consistent with the locked 13-stage production contract.
+run_step "top1-component-registry" python3 .github/scripts/top1_component_registry.py
+
+# Transform the source first. The exhaustive cell audits the FINAL generated /
+# patched source, not the pre-codegen template.
 run_step "contract-codegen" python3 .github/scripts/production_truth_codegen.py
 run_step "production-truth-patch" python3 .github/scripts/production_truth_patch.py
 run_step "production-truth-runtime-fix" python3 .github/scripts/production_truth_runtime_fix.py
@@ -72,14 +47,11 @@ run_step "kotlin-source-integrity" bash -c '
   if grep -Fq "},1500)" activity_fixed.kt; then echo "ERROR: fixed 1500ms recording wait remains"; rc=1; fi
   exit "$rc"
 '
-
 run_step "contract-json-validation" python3 -c '
 import json
 from pathlib import Path
-p=Path("production_truth_contract.json")
-o=json.loads(p.read_text(encoding="utf-8"))
-assert o["schema"] == 2
-assert o["stage_count"] == 13
+p=Path("production_truth_contract.json"); o=json.loads(p.read_text(encoding="utf-8"))
+assert o["schema"] == 2; assert o["stage_count"] == 13
 assert [s["id"] for s in o["stages"]] == list(range(1,14))
 assert len({s["name"] for s in o["stages"]}) == 13
 assert len({s["button"] for s in o["stages"]}) == 13
@@ -89,21 +61,9 @@ for group, values in o["vocabulary"].items():
     assert not any(any(t in v.upper() for t in ("TODO","FIXME","PLACEHOLDER")) for v in vals), group
 print("CONTRACT_JSON_PASS")
 '
-
 {
-  echo
-  echo "============================================================"
-  echo "PRODUCTION TRUTH PIPELINE FINAL"
-  echo "cells_total=${TOTAL}"
-  echo "cells_failed=${FAILED}"
-  echo "full_log=${LOG_DIR}/00-combined.log"
-  echo "============================================================"
+  echo; echo "============================================================"; echo "PRODUCTION TRUTH PIPELINE FINAL"; echo "cells_total=${TOTAL}"; echo "cells_failed=${FAILED}"; echo "full_log=${LOG_DIR}/00-combined.log"; echo "============================================================"
 } | tee -a "$LOG_DIR/00-combined.log"
-
-echo
-cat "$LOG_DIR/00-combined.log"
-
-if [[ "$FAILED" -ne 0 ]]; then
-  exit 1
-fi
+echo; cat "$LOG_DIR/00-combined.log"
+if [[ "$FAILED" -ne 0 ]]; then exit 1; fi
 exit 0
