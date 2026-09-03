@@ -10,8 +10,7 @@ s=s.replace('if static_ok:build_ok,bi=build()', 'if static_ok:build_ok,bi=build(
 activity=Path('activity_fixed.kt')
 if activity.is_file():
     a=activity.read_text(encoding='utf-8')
-    old_story='root.addView(story,LinearLayout.LayoutParams(-1,0,1f)'
-    if old_story not in a: old_story='root.addView(story,LinearLayout.LayoutParams(-1,0,1f))'
+    old_story='root.addView(story,LinearLayout.LayoutParams(-1,0,1f))'
     new_story='root.addView(story,LinearLayout.LayoutParams(-1,180))'
     if old_story not in a: raise SystemExit('UI FIX: story layout target not found')
     a=a.replace(old_story,new_story,1)
