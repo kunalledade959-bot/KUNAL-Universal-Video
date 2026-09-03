@@ -7,6 +7,9 @@ on:
 permissions:
   contents: read
 
+env:
+  MASTER_XRAY_MODE: forensic-fail-continue
+
 jobs:
   truth-audit:
     runs-on: ubuntu-latest
@@ -24,7 +27,6 @@ jobs:
           python3 .github/scripts/master_xray_forensic.py 2>&1 | tee master-xray-pre.log
           rc=${PIPESTATUS[0]}
           echo "MASTER_XRAY_PRE_EXIT_CODE=$rc" | tee -a master-xray-pre.log
-          # Findings are evidence, not a reason to stop collection.
           exit 0
 
       - name: Run consolidated repair and truth pipeline
