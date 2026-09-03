@@ -8,6 +8,7 @@ on:
       - "activity_fixed.kt"
       - "pro_repair_v3.py"
       - "preflight_patch.py"
+      - "stage11_hardening_v2.py"
       - ".github/scripts/emulator-smoke.sh"
       - ".github/workflows/main.yml"
 
@@ -39,6 +40,9 @@ jobs:
       - name: Apply deterministic preflight patch
         shell: bash
         run: python3 preflight_patch.py
+      - name: Apply Stage 11 production media hardening
+        shell: bash
+        run: python3 stage11_hardening_v2.py
       - name: Run autonomous repair and build
         shell: bash
         run: python3 pro_repair_v3.py
