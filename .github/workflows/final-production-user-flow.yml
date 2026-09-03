@@ -63,6 +63,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p artifact final-user-flow-evidence
           python3 preflight_patch.py
           python3 constructor_lifecycle_patch.py
           python3 stage11_hardening_v2.py
