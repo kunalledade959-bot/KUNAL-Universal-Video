@@ -2,6 +2,7 @@
 """Fail-closed registry for repository-native top-1 production components."""
 from __future__ import annotations
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,7 +36,13 @@ check("authority:13-buttons",activity.count("ProductionTruth.button(")==13,str(a
 check("authority:StageGate","ProductionTruth.stageNames" in gate)
 check("safety:no-scene-truncation",".take(30)" not in activity)
 check("safety:no-generic-prompt","VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character" not in activity)
-check("safety:no-fixed-recording-wait","},1500)" not in activity)
+# Only reject the legacy Stage-10 stop implementation. Other 1500ms values,
+# such as target-operation polling, are independent and must not be conflated.
+stop_start=activity.find("    fun stopRecordingFromBridge(){")
+stop_end=activity.find("\n\n    private fun latestRecording",stop_start)
+stop_block=activity[stop_start:stop_end] if stop_start>=0 and stop_end>stop_start else ""
+check("safety:no-fixed-recording-wait", "},1500)" not in stop_block)
+check("safety:recording-finalization-polling","waitForRecordingFinalization" in stop_block and "System.currentTimeMillis()+10000L" in stop_block)
 check("pipeline:top1-cell","top1-exhaustive-repair-and-audit" in pipeline)
 check("pipeline:independent-audit","production-truth-audit" in pipeline)
 report={"status":"PASS" if not errors else "FAIL","selected":SELECTED,"checks":checks,"reference_policy":{"verified_baseline_branch":"LOCKED-APK-RUN50-VERIFIED","use":"reference only; never overwrite hardened production source"}}
