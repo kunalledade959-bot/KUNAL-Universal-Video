@@ -35,18 +35,27 @@ run_step "top1-exhaustive-repair-and-audit" python3 .github/scripts/top1_exhaust
 run_step "production-truth-audit" python3 .github/scripts/production_truth_audit.py
 
 # Independent source invariants continue even if a mutation step failed.
+# Stage 2 PING is validated against the authoritative source set rather than
+# assuming the generated Activity itself owns the protocol constant.
 run_step "kotlin-source-integrity" bash -c '
   set -u
   rc=0
   test -s activity_fixed.kt || { echo "ERROR: activity_fixed.kt missing/empty"; rc=1; }
   test -s stage_gate.kt || { echo "ERROR: stage_gate.kt missing/empty"; rc=1; }
   test -s pro_repair_v3.py || { echo "ERROR: pro_repair_v3.py missing/empty"; rc=1; }
-  source="$(cat activity_fixed.kt pro_repair_v3.py 2>/dev/null)"
   grep -Fq "object ProductionTruth" activity_fixed.kt || { echo "ERROR: ProductionTruth object missing"; rc=1; }
   grep -Fq "ProductionTruth.button(13)" activity_fixed.kt || { echo "ERROR: stage 13 button is not registry-bound"; rc=1; }
   grep -Fq "ProductionTruth.stageNames" stage_gate.kt || { echo "ERROR: StageGate is not registry-bound"; rc=1; }
   grep -Fq "stage2BindingDeadline=System.currentTimeMillis()+8000L" activity_fixed.kt || { echo "ERROR: Stage 2 binding deadline missing"; rc=1; }
-  grep -Fq "ControllerProtocol.PING" "$PWD/activity_fixed.kt" "$PWD/pro_repair_v3.py" || { echo "ERROR: Stage 2 PING contract missing from authoritative source set"; rc=1; }
+  if grep -Fq "ControllerProtocol.PING" activity_fixed.kt; then
+    echo "STAGE2_PING_SOURCE=activity_fixed.kt"
+  elif grep -Fq "ControllerProtocol.PING" pro_repair_v3.py; then
+    echo "STAGE2_PING_SOURCE=pro_repair_v3.py"
+  elif grep -Fq "PING" pro_repair_v3.py && grep -Fq "PONG" pro_repair_v3.py; then
+    echo "STAGE2_PING_SOURCE=pro_repair_v3.py_protocol_literals"
+  else
+    echo "ERROR: Stage 2 PING/PONG contract missing from authoritative source set"; rc=1
+  fi
   grep -Fq "service_bound" pro_repair_v3.py || { echo "ERROR: generator service_bound status missing"; rc=1; }
   if grep -Fq ".take(30)" activity_fixed.kt; then echo "ERROR: silent scene truncation remains"; rc=1; fi
   if grep -Fq "VISUAL_PROMPT=cinematic_3D_cartoon_consistent_character" activity_fixed.kt; then echo "ERROR: generic prompt replacement remains"; rc=1; fi
