@@ -3,7 +3,19 @@ name: Full E2E Emulator Gate
 on:
   push:
     branches: [main]
+    paths:
+      - "*.zip"
+      - "activity_fixed.kt"
+      - "pro_repair_v3.py"
+      - "preflight_patch.py"
+      - "stage11_hardening_v2.py"
+      - ".github/scripts/full-e2e-emulator.sh"
+      - ".github/workflows/full-e2e-emulator.yml"
   workflow_dispatch:
+
+concurrency:
+  group: kunal-universal-video-full-e2e-main
+  cancel-in-progress: true
 
 permissions:
   contents: read
