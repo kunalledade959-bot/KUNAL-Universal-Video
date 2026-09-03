@@ -1,0 +1,68 @@
+name: One Shot Production Repair
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: kunal-universal-video-one-shot-repair
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+  copilot-requests: write
+
+jobs:
+  one-shot-repair:
+    name: Diagnose, repair and prove in one pass
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required Android SDK components
+        run: |
+          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+
+      - name: Install Copilot CLI
+        run: npm install -g @github/copilot
+
+      - name: Run one-shot production repair cell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/one-shot-production-repair.sh
+
+      - name: Upload one-shot evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-one-shot-repair-evidence
+          path: |
+            ai-evidence/one-shot/
+            artifact/
+            e2e-*.txt
+            e2e-*.log
+            e2e-*.xml
+            e2e-*.json
+            avd-create.log
+          if-no-files-found: ignore
+          retention-days: 14
