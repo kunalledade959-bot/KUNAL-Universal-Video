@@ -24,8 +24,21 @@ if activity.is_file():
     if old_end not in a:
         raise SystemExit('UI FIX: actions layout target not found')
     a=a.replace(old_end,new_end,1)
+
+    # Stage order repair: Stage 2 owns mobile/accessibility readiness; Stage 3 owns target selection.
+    # The old Stage 2 required a target before Stage 3 could run, making a clean first-run path impossible.
+    old_order='''        if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service is not enabled");openAccessibility();return}\n        if(target.isBlank())target=prefs().getString(TARGET,"")?:""\n        if(target.isBlank()){fail(2,"Target APK must be selected");return}\n        UniversalAccessibilityService.targetPackage=target;bridge?.connect(target)\n        pass(2,"Accessibility enabled and local controller session connected")'''
+    new_order='''        if(!UniversalAccessibilityService.isEnabled){fail(2,"Accessibility service is not enabled");openAccessibility();return}\n        pass(2,"Accessibility enabled and local controller session ready")'''
+    if old_order not in a:
+        raise SystemExit('STAGE ORDER FIX: Stage 2 target dependency not found')
+    a=a.replace(old_order,new_order,1)
+    old_stage3='''        target=apps[pos].packageName;prefs().edit().putString(TARGET,target).apply();UniversalAccessibilityService.targetPackage=target\n        pass(3,"Target package selected: $target")'''
+    new_stage3='''        target=apps[pos].packageName;prefs().edit().putString(TARGET,target).apply();UniversalAccessibilityService.targetPackage=target;bridge?.connect(target)\n        pass(3,"Target package selected and local controller session connected: $target")'''
+    if old_stage3 not in a:
+        raise SystemExit('STAGE ORDER FIX: Stage 3 target connection point not found')
+    a=a.replace(old_stage3,new_stage3,1)
     activity.write_text(a,encoding='utf-8')
-    print('UI SCROLL FIX: PASS')
+    print('UI + STAGE ORDER FIX: PASS')
 else:
     raise SystemExit('UI FIX: activity_fixed.kt missing')
 
