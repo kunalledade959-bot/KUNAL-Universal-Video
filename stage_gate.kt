@@ -34,17 +34,23 @@ class StageGate(context: Context) {
     @Synchronized fun isUnlocked(id: Int): Boolean = valid(id) && (id == 1 || stages[id - 2].state == State.PASS)
 
     @Synchronized fun begin(id: Int): Boolean {
-        if (!isUnlocked(id)) return false
+        if (!valid(id) || !isUnlocked(id)) return false
+        val current = stages[id - 1].state
+        if (current == State.PASS || current == State.RUNNING || current == State.FAIL) return false
+        if (id > 1 && current != State.READY) return false
         stages[id - 1].state = State.RUNNING
         persist()
         return true
     }
 
     @Synchronized fun pass(id: Int, evidence: String): Boolean {
-        if (!valid(id) || stages[id - 1].state != State.RUNNING) return false
+        if (!valid(id) || stages[id - 1].state != State.RUNNING || evidence.isBlank()) return false
         stages[id - 1].state = State.PASS
         stages[id - 1].evidence = evidence
-        if (id < 13) stages[id].state = State.READY
+        if (id < 13) {
+            stages[id].state = State.READY
+            stages[id].evidence = ""
+        }
         persist()
         return true
     }
@@ -52,14 +58,19 @@ class StageGate(context: Context) {
     @Synchronized fun fail(id: Int, evidence: String) {
         if (!valid(id)) return
         stages[id - 1].state = State.FAIL
-        stages[id - 1].evidence = evidence
-        if (id < 13) for (n in id + 1..13) { stages[n - 1].state = State.LOCKED; stages[n - 1].evidence = "" }
+        stages[id - 1].evidence = evidence.ifBlank { "Stage failed without evidence" }
+        if (id < 13) for (n in id + 1..13) {
+            stages[n - 1].state = State.LOCKED
+            stages[n - 1].evidence = ""
+        }
         persist()
     }
 
     @Synchronized fun resetForRepair(id: Int): Boolean {
         if (!valid(id)) return false
         if (id > 1 && stages[id - 2].state != State.PASS) return false
+        val current = stages[id - 1].state
+        if (current != State.FAIL && !(id == 1 && current == State.LOCKED)) return false
         stages[id - 1].state = State.READY
         stages[id - 1].evidence = ""
         persist()
@@ -68,23 +79,55 @@ class StageGate(context: Context) {
 
     @Synchronized fun evidenceJson(): JSONObject {
         val a = JSONArray()
-        stages.forEach { a.put(JSONObject().put("stage", it.id).put("name", it.name).put("state", it.state.name).put("evidence", it.evidence)) }
+        stages.forEach {
+            a.put(JSONObject().put("stage", it.id).put("name", it.name).put("state", it.state.name).put("evidence", it.evidence))
+        }
         return JSONObject().put("current_stage", currentStage()).put("final_pass", stages.all { it.state == State.PASS }).put("stages", a)
     }
 
     private fun persist() { prefs.edit().putString("state", evidenceJson().toString()).apply() }
 
+    private fun resetAllLocked() {
+        stages.forEach { it.state = State.LOCKED; it.evidence = "" }
+    }
+
     private fun restore() {
         val raw = prefs.getString("state", null) ?: return
         try {
             val a = JSONObject(raw).getJSONArray("stages")
-            for (i in 0 until minOf(13, a.length())) {
+            if (a.length() != 13) throw IllegalStateException("stage_count")
+            for (i in 0 until 13) {
                 val o = a.getJSONObject(i)
+                if (o.optInt("stage", -1) != i + 1) throw IllegalStateException("stage_order")
                 stages[i].state = State.valueOf(o.optString("state", "LOCKED"))
                 stages[i].evidence = o.optString("evidence", "")
             }
+            var previousPassed = true
+            for (i in 0 until 13) {
+                val st = stages[i].state
+                if (st == State.PASS && (!previousPassed || stages[i].evidence.isBlank())) throw IllegalStateException("invalid_pass_chain")
+                if (st == State.READY && !previousPassed) throw IllegalStateException("invalid_ready_chain")
+                if (st == State.RUNNING) {
+                    if (!previousPassed) throw IllegalStateException("invalid_running_chain")
+                    stages[i].state = State.FAIL
+                    stages[i].evidence = "Interrupted while RUNNING; manual repair required"
+                    for (n in i + 1 until 13) {
+                        stages[n].state = State.LOCKED
+                        stages[n].evidence = ""
+                    }
+                    break
+                }
+                if (st == State.FAIL) {
+                    for (n in i + 1 until 13) {
+                        stages[n].state = State.LOCKED
+                        stages[n].evidence = ""
+                    }
+                    break
+                }
+                previousPassed = st == State.PASS
+            }
         } catch (_: Exception) {
-            stages.forEach { it.state = State.LOCKED; it.evidence = "" }
+            resetAllLocked()
         }
     }
 }
