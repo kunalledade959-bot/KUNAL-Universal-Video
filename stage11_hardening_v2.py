@@ -1,15 +1,13 @@
 from pathlib import Path
 
-p = Path('activity_fixed.kt')
-if not p.is_file():
-    raise SystemExit('STAGE 11 V2: activity_fixed.kt missing')
-a = p.read_text(encoding='utf-8')
-start = a.find('    private fun muxVideoAudio(')
-end = a.find('    private fun verifyAndFix()', start)
-if start < 0 or end < 0:
-    raise SystemExit('STAGE 11 V2: media assembly block not found')
+p=Path('activity_fixed.kt')
+if not p.is_file(): raise SystemExit('STAGE 11 V2: activity_fixed.kt missing')
+a=p.read_text(encoding='utf-8')
+start=a.find('    private fun muxVideoAudio(')
+end=a.find('    private fun verifyAndFix()',start)
+if start<0 or end<0: raise SystemExit('STAGE 11 V2: media assembly block not found')
 
-block = r'''    private fun muxVideoAudio(videoUri:android.net.Uri,audio:File,out:File){
+block='''    private fun muxVideoAudio(videoUri:android.net.Uri,audio:File,out:File){
         if(out.exists())out.delete()
         val vf=contentResolver.openFileDescriptor(videoUri,"r")?:throw IllegalStateException("video FD unavailable")
         val ve=MediaExtractor();val encodedAudio=File(cacheDir,"aac_${sid}.mp4")
@@ -109,6 +107,18 @@ block = r'''    private fun muxVideoAudio(videoUri:android.net.Uri,audio:File,ou
     }
 
 '''
-a = a[:start] + block + a[end:]
+a=a[:start]+block+a[end:]
+old='''        try{muxVideoAudio(video,File(audioPath),out);if(!out.isFile||out.length()<1024){fail(11,"Assembly produced no usable MP4");return}
+            prefs().edit().putString(FINAL,out.absolutePath).apply();pass(11,"Visual recording + narration muxed into assembled MP4")
+        }catch(e:Exception){fail(11,"Assembly failed: ${e.javaClass.simpleName}: ${e.message}")}'''
+new='''        try{muxVideoAudio(video,File(audioPath),out);if(!out.isFile||out.length()<1024){fail(11,"Assembly produced no usable MP4");return}
+            val check=MediaExtractor();try{check.setDataSource(out.absolutePath);var hasVideo=false;var hasAudio=false
+                for(i in 0 until check.trackCount){val mime=check.getTrackFormat(i).getString(MediaFormat.KEY_MIME)?:"";hasVideo=hasVideo||mime.startsWith("video/");hasAudio=hasAudio||mime.startsWith("audio/")}
+                if(!hasVideo||!hasAudio){fail(11,"Assembly output missing required video/audio tracks");return}
+            }finally{check.release()}
+            prefs().edit().putString(FINAL,out.absolutePath).apply();pass(11,"Production assembly verified: video + AAC narration + synchronized MP4")
+        }catch(e:Exception){if(out.exists())out.delete();fail(11,"Assembly failed: ${e.javaClass.simpleName}: ${e.message}")}'''
+if old not in a: raise SystemExit('STAGE 11 V2: assemble gate target not found')
+a=a.replace(old,new,1)
 p.write_text(a,encoding='utf-8')
 print('STAGE 11 V2: PASS')
