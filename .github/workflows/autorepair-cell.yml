@@ -45,7 +45,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null
+          # sdkmanager exits successfully after accepting all licenses, while the
+          # long-lived `yes` producer receives SIGPIPE. Do not let that expected
+          # producer-side SIGPIPE mask the real sdkmanager exit status.
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+          if [[ "$LICENSE_STATUS" != "0" ]]; then
+            echo "Android SDK license acceptance failed with sdkmanager exit code $LICENSE_STATUS" >&2
+            exit "$LICENSE_STATUS"
+          fi
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
 
       - name: Install Copilot CLI
