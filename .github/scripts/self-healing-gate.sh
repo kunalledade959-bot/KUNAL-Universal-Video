@@ -81,6 +81,17 @@ echo 'SELF_HEAL_EMULATOR_BOOT_PASS' | tee e2e-emulator-ready.txt
 adb -s emulator-5554 wait-for-device
 adb -s emulator-5554 shell echo KUNAL_SELF_HEAL_ADB_READY | tee e2e-adb-ready.txt
 
+# Android 35 emulator images used by CI have shown repeatable Bluetooth daemon
+# SIGABRTs that cascade into SystemUI ANRs. Bluetooth is not part of this app's
+# product contract, so remove that unrelated platform variable before judging
+# the application. Keep evidence if the service cannot be disabled.
+echo 'CI_EMULATOR_BLUETOOTH_HARDENING=1' | tee e2e-bluetooth-hardening.txt
+adb -s emulator-5554 shell settings put global bluetooth_on 0 >/dev/null 2>&1 || true
+adb -s emulator-5554 shell svc bluetooth disable >/dev/null 2>&1 || true
+adb -s emulator-5554 shell am force-stop com.android.bluetooth >/dev/null 2>&1 || true
+sleep 5
+adb -s emulator-5554 shell dumpsys bluetooth_manager > e2e-bluetooth-state.txt 2>&1 || true
+
 # The full E2E script is the final runtime authority.
 bash .github/scripts/full-e2e-emulator.sh
 
