@@ -5,6 +5,7 @@ on:
     workflows:
       - Runtime Crash Diagnostic
       - Full E2E Emulator Gate
+      - Final Production User Flow Gate
     types: [completed]
     branches: [main]
   workflow_dispatch:
@@ -42,6 +43,7 @@ jobs:
             echo "Triggering workflow run: $RUN_ID" | tee ai-evidence/trigger.txt
             gh run download "$RUN_ID" -n full-e2e-emulator-evidence -D ai-evidence/full-e2e || true
             gh run download "$RUN_ID" -n KUNAL-Universal-Video-runtime-evidence -D ai-evidence/runtime || true
+            gh run download "$RUN_ID" -n final-production-user-flow-evidence -D ai-evidence/final-user-flow || true
             gh run view "$RUN_ID" --log-failed > ai-evidence/trigger-failed-log.txt 2>&1 || true
           else
             printf '%s\n' 'Manual autonomous repair. Inspect current repository and run the real gate.' > ai-evidence/manual-trigger.txt
@@ -65,7 +67,6 @@ jobs:
             echo "========== AUTOREPAIR ITERATION $ITERATION/$MAX_ITERATIONS =========="
             mkdir -p "ai-evidence/iterations/$ITERATION"
 
-            # Give the repair agent the complete accumulated evidence, not just the last symptom.
             copilot --autopilot --yolo --max-autopilot-continues 12 -p "
             You are the senior production Android repair engineer for KUNAL Universal Video.
             This is autonomous repair iteration $ITERATION of $MAX_ITERATIONS.
@@ -73,10 +74,10 @@ jobs:
             PRIMARY RULE: fix the first real root cause, verify it, then move to the next real error. Never hide an error, weaken a test, bypass a gate, or claim PASS without actual evidence.
 
             READ FIRST:
-            1. All files under ai-evidence, including prior iteration notes and failure logs.
+            1. All files under ai-evidence, including final-user-flow evidence and prior iteration notes.
             2. The current repository state and git diff.
             3. KUNAL_UNIVERSAL_VIDEO_ANDROID_PROJECT_FIXED.zip and the production build/repair scripts.
-            4. The current .github/scripts/self-healing-gate.sh and full E2E gate.
+            4. self-healing-gate.sh, full-e2e-emulator.sh, and final-production-user-flow.sh.
 
             CLASSIFY THE FAILURE before editing:
             - CI/emulator/tooling/infrastructure failure: repair the actual CI/tooling script or configuration.
@@ -84,14 +85,21 @@ jobs:
             - E2E functional failure: repair the real feature/gate contract, not the test assertion.
             Never change app behavior to compensate for an infrastructure failure.
 
+            SPECIAL RULE FOR FINAL USER FLOW:
+            Treat TARGET_SELECTION_CONTROL_MISSING, TARGET_SELECTION_LIST_NOT_POPULATED_OR_VISIBLE,
+            TARGET_ROW_NOT_FOUND, TARGET_SELECTION_REFLECTED_FAILURE, target persistence failure,
+            target foreground failure, or any similar selection/launch defect as a real product defect.
+            Trace it from UI -> MainActivity state -> package manager -> persistence -> bridge/accessibility -> target launch.
+            Do not make the test easier just to obtain PASS.
+
             QUALITY BAR:
             - Production-grade only. No toy app, stub, fake result, skipped stage, disabled assertion, or swallowed fatal error.
             - Preserve package com.kunal.universalvideo and the intended controller, target-app control, accessibility, MediaProjection, TTS/audio, video assembly, verification, and gallery-export architecture.
             - Make the smallest correct change with the lowest regression risk.
             - Keep changes idempotent and deterministic where possible.
             - Do not edit secrets, credentials, or unrelated files.
-            - You MAY edit Android project sources, repair/build scripts, E2E scripts, and CI workflow files when the evidence proves the defect is there.
-            - Do not merely rewrite the gate so it passes. The gate must remain strict.
+            - You MAY edit Android project sources, repair/build scripts, E2E scripts, and CI workflow files when evidence proves the defect is there.
+            - Do not merely rewrite a gate so it passes. Gates must remain strict.
             - Before finishing this iteration, run every practical static/build check available on Ubuntu.
             - Write a concise diagnosis and exact repair to ai-evidence/iterations/$ITERATION/repair.md.
             - Do not stop merely because the previous error disappeared. Look for the next blocker only after verification.
@@ -126,8 +134,6 @@ jobs:
             fi
 
             echo "SELF_HEALING_GATE_FAIL iteration=$ITERATION status=$GATE_STATUS" | tee "ai-evidence/iterations/$ITERATION/result.txt"
-
-            # Preserve the newest evidence for the next repair decision.
             find . -maxdepth 1 -type f \( -name 'e2e-*.txt' -o -name 'e2e-*.log' -o -name 'e2e-*.xml' -o -name 'e2e-*.json' -o -name 'avd-create.log' \) -print -exec cp -f {} "ai-evidence/" \; 2>/dev/null || true
           done
 
