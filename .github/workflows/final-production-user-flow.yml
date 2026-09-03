@@ -49,15 +49,49 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Set up Android SDK
+      - name: Set up Android SDK tooling
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
 
-      - name: Install Android SDK components
+      - name: Install Android SDK components with deterministic retry
         shell: bash
         run: |
           set -euo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND" >&2; exit 1; }
+
+          set +o pipefail
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+          [[ "$LICENSE_STATUS" == "0" ]] || { echo "SDK_LICENSE_ACCEPTANCE_FAILED=$LICENSE_STATUS" >&2; exit "$LICENSE_STATUS"; }
+
+          packages=(
+            "platform-tools"
+            "platforms;android-35"
+            "build-tools;35.0.0"
+            "emulator"
+            "system-images;android-35;default;x86_64"
+          )
+          for attempt in 1 2 3; do
+            echo "SDK_COMPONENT_INSTALL_ATTEMPT=$attempt"
+            if "$SDKMANAGER" --install "${packages[@]}"; then
+              echo "SDK_COMPONENT_INSTALL=PASS"
+              exit 0
+            fi
+            echo "SDK_COMPONENT_INSTALL_ATTEMPT=$attempt FAILED" >&2
+            if (( attempt < 3 )); then
+              rm -rf "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.temp" \
+                     "${ANDROID_HOME:-/usr/local/lib/android/sdk}/.downloadIntermediates" || true
+              sleep 5
+            fi
+          done
+          echo "SDK_COMPONENT_INSTALL=FAIL" >&2
+          exit 1
 
       - name: Reproduce production APK
         shell: bash
