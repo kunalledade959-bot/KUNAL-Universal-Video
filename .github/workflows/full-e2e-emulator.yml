@@ -43,24 +43,45 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Set up Android SDK tooling
-        uses: android-actions/setup-android@v3
-        with:
-          cmdline-tools-version: 12266719
-          accept-android-sdk-licenses: true
-          log-accepted-android-sdk-licenses: true
-
-      - name: Install Android SDK components with deterministic retry
+      - name: Bootstrap preinstalled Android SDK deterministically
         shell: bash
         run: |
           set -euo pipefail
-          SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager"
-          [[ -x "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND=$SDKMANAGER" >&2; exit 1; }
 
-          # Accept licenses without letting the producer's expected SIGPIPE
-          # masquerade as an sdkmanager failure under pipefail.
+          # ubuntu-24.04 GitHub-hosted runners already contain the Android SDK.
+          # Do not download/replace the command-line tools here: that action has
+          # been the failing boundary in the real E2E run. Prefer an existing,
+          # executable sdkmanager and fail closed if the runner image lacks one.
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [[ -z "$SDK_ROOT" ]]; then
+            for candidate in \
+              "$HOME/Android/Sdk" \
+              "/usr/local/lib/android/sdk" \
+              "/opt/android-sdk"; do
+              if [[ -d "$candidate" ]]; then SDK_ROOT="$candidate"; break; fi
+            done
+          fi
+          [[ -n "$SDK_ROOT" && -d "$SDK_ROOT" ]] || { echo "ANDROID_SDK_ROOT_NOT_FOUND" >&2; exit 1; }
+          export ANDROID_HOME="$SDK_ROOT"
+          export ANDROID_SDK_ROOT="$SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMANAGER=""
+          for candidate in \
+            "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" \
+            "$SDK_ROOT/cmdline-tools/bin/sdkmanager" \
+            "$SDK_ROOT/cmdline-tools/16.0/bin/sdkmanager" \
+            "$SDK_ROOT/cmdline-tools/15.0/bin/sdkmanager" \
+            "$SDK_ROOT/tools/bin/sdkmanager"; do
+            if [[ -x "$candidate" ]]; then SDKMANAGER="$candidate"; break; fi
+          done
+          [[ -n "$SDKMANAGER" ]] || { echo "SDKMANAGER_NOT_FOUND" >&2; exit 1; }
+          echo "SDKMANAGER=$SDKMANAGER"
+          "$SDKMANAGER" --version
+
+          # License acceptance is intentionally pipefail-safe because `yes`
+          # normally exits through SIGPIPE once sdkmanager has enough input.
           set +o pipefail
           yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
           LICENSE_STATUS=${PIPESTATUS[1]}
@@ -77,7 +98,6 @@ jobs:
                 return 0
               fi
               echo "SDK_PACKAGE=$pkg ATTEMPT=$attempt FAILED" >&2
-              # Remove only transient/corrupt download state before retrying.
               rm -rf "$SDK_ROOT/.temp" "$SDK_ROOT/.downloadIntermediates" || true
               if (( attempt < 4 )); then sleep 5; fi
             done
@@ -85,8 +105,6 @@ jobs:
             return 1
           }
 
-          # Install independently so a corrupt/transient archive is isolated to
-          # one component instead of invalidating the entire SDK transaction.
           install_package "platform-tools"
           install_package "platforms;android-35"
           install_package "build-tools;35.0.0"
