@@ -35,6 +35,9 @@ jobs:
       - name: Apply deterministic preflight patch
         shell: bash
         run: python3 preflight_patch.py
+      - name: Apply MainActivity lifecycle constructor fix
+        shell: bash
+        run: python3 constructor_lifecycle_patch.py
       - name: Apply Stage 11 production media hardening
         shell: bash
         run: python3 stage11_hardening_v2.py
