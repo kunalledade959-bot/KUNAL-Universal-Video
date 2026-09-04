@@ -4,6 +4,7 @@ ROOT="$(pwd)"
 EVIDENCE="$ROOT/final-user-flow-evidence"
 APK="artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk"
 PKG="com.kunal.universalvideo"
+SERVICE="$PKG/.UniversalAccessibilityService"
 mkdir -p "$EVIDENCE" artifact
 exec > >(tee "$EVIDENCE/final-user-flow.log") 2>&1
 
@@ -38,6 +39,7 @@ capture_all(){
   adbq shell dumpsys window windows > "$EVIDENCE/windows.txt" 2>&1 || true
   adbq shell dumpsys package "$PKG" > "$EVIDENCE/package.txt" 2>&1 || true
   adbq shell settings get secure enabled_accessibility_services > "$EVIDENCE/accessibility.txt" 2>&1 || true
+  adbq shell dumpsys accessibility > "$EVIDENCE/accessibility-dumpsys.txt" 2>&1 || true
   adbq logcat -d -b crash > "$EVIDENCE/crash-logcat.txt" 2>&1 || true
   adbq logcat -d -t 3000 > "$EVIDENCE/logcat.txt" 2>&1 || true
   adbq exec-out screencap -p > "$EVIDENCE/screen.png" 2>/dev/null || true
@@ -70,11 +72,51 @@ import sys,xml.etree.ElementTree as ET,re
 root=ET.parse(sys.argv[1]).getroot(); nodes=list(root.iter()); sp=[n for n in nodes if n.attrib.get('class')=='android.widget.Spinner']
 if not sp: raise SystemExit('TARGET_SELECTION_CONTROL_MISSING')
 if not any('1 • START / DIAGNOSTIC' in n.attrib.get('text','') for n in nodes): raise SystemExit('STAGE1_CONTROL_MISSING')
+if not any('2 • ENABLE ACCESSIBILITY / CONNECT' in n.attrib.get('text','') for n in nodes): raise SystemExit('STAGE2_CONTROL_MISSING')
+if not any('3 • SELECT / SAVE TARGET' in n.attrib.get('text','') for n in nodes): raise SystemExit('STAGE3_CONTROL_MISSING')
 m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',sp[0].attrib.get('bounds',''))
 if not m: raise SystemExit('TARGET_SELECTION_BOUNDS_INVALID')
 x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2)
 PY
-then :; else STATUS=$?; fail "Production target-selection control is missing or malformed (diagnostic=$STATUS)"; fi
+then :; else STATUS=$?; fail "Production target-selection controls are missing or malformed (diagnostic=$STATUS)"; fi
+
+# Stage 2 is a real prerequisite of Stage 3. The previous gate jumped from
+# target selection directly to Stage 3, while StageGate correctly rejected it.
+# Prepare the fresh emulator's declared accessibility service, then execute the
+# actual production Stage 2 button so the app itself validates the connection.
+adbq shell settings put secure enabled_accessibility_services "$SERVICE" > "$EVIDENCE/accessibility-enable.txt" 2>&1 || fail "Could not configure emulator accessibility service"
+adbq shell settings put secure accessibility_enabled 1 >> "$EVIDENCE/accessibility-enable.txt" 2>&1 || fail "Could not enable emulator accessibility"
+sleep 3
+ACCESS_STATE="$(adbq shell settings get secure enabled_accessibility_services | tr -d '\r' || true)"
+printf 'EXPECTED_SERVICE=%s\nACTUAL_SERVICES=%s\n' "$SERVICE" "$ACCESS_STATE" > "$EVIDENCE/accessibility-pre-stage2.txt"
+grep -Fq "$SERVICE" <<<"$ACCESS_STATE" || fail "Declared Accessibility service did not become enabled before Stage 2"
+adbq shell dumpsys accessibility > "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" 2>&1 || fail "Accessibility diagnostics unavailable before Stage 2"
+grep -Fq "$PKG/.UniversalAccessibilityService" "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered in the running accessibility manager"
+
+if python3 - "$EVIDENCE/ui-initial.xml" > "$EVIDENCE/stage2-center.txt" <<'PY'
+import sys,xml.etree.ElementTree as ET,re
+root=ET.parse(sys.argv[1]).getroot()
+for n in root.iter():
+    if n.attrib.get('text','')=='2 • ENABLE ACCESSIBILITY / CONNECT' and n.attrib.get('enabled','true')=='true' and n.attrib.get('clickable','true')=='true':
+        m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.attrib.get('bounds',''))
+        if m:
+            x1,y1,x2,y2=map(int,m.groups())
+            if x2>x1 and y2>y1: print((x1+x2)//2,(y1+y2)//2); break
+else: raise SystemExit('STAGE2_CONTROL_NOT_FOUND')
+PY
+then :; else STATUS=$?; fail "Explicit Stage 2 control unavailable (diagnostic=$STATUS)"; fi
+read -r C2X C2Y < "$EVIDENCE/stage2-center.txt"
+adbq shell input tap "$C2X" "$C2Y" || fail "Stage 2 connect action failed"
+sleep 2
+dump_ui "$EVIDENCE/ui-after-stage2.xml" "$EVIDENCE/ui-after-stage2.err" || fail "Post-Stage 2 UI hierarchy unavailable"
+grep -Eq 'Stage 2 (PASS|READY)' "$EVIDENCE/ui-after-stage2.xml" || fail "Stage 2 did not report a successful connection state"
+ACCESS_STATE_AFTER="$(adbq shell settings get secure enabled_accessibility_services | tr -d '\r' || true)"
+printf 'STAGE2_ACCESSIBILITY_STATE=%s\n' "$ACCESS_STATE_AFTER" > "$EVIDENCE/stage2-accessibility-state.txt"
+grep -Fq "$SERVICE" <<<"$ACCESS_STATE_AFTER" || fail "Accessibility service disappeared after Stage 2 connect"
+adbq shell dumpsys accessibility > "$EVIDENCE/accessibility-post-stage2-dumpsys.txt" 2>&1 || fail "Accessibility diagnostics unavailable after Stage 2"
+grep -Fq "$PKG/.UniversalAccessibilityService" "$EVIDENCE/accessibility-post-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered after Stage 2 connect"
+printf 'STAGE2_EXECUTION=PASS\n' > "$EVIDENCE/stage2-result.txt"
+
 read -r X Y < "$EVIDENCE/spinner-center.txt"
 adbq shell input tap "$X" "$Y" || fail "Target selection control could not be opened"
 sleep 2
@@ -148,5 +190,5 @@ sleep 2
 dump_ui "$EVIDENCE/ui-after-target-handoff.xml" "$EVIDENCE/ui-after-target-handoff.err" || fail "Post-handoff controller UI hierarchy unavailable"
 grep -Fq "$TARGET" "$EVIDENCE/ui-after-target-handoff.xml" || fail "Selected target was lost after target-app handoff"
 
-capture_all "selection-stage3-save-and-target-handoff-complete"
-printf 'FINAL_PRODUCTION_USER_FLOW_PASS\nTARGET_SELECTION_CONTROL=PASS\nTARGET_POPUP_POPULATED=PASS\nTARGET_SELECTION_REFLECTED=PASS\nSTAGE3_SAVE_CONTROL=PASS\nTARGET_PERSISTENCE=PASS\nTARGET_LAUNCH=PASS\nTARGET_FOREGROUND=PASS\nTARGET_HANDOFF_STATE=PASS\n' | tee "$EVIDENCE/PASS.txt"
+capture_all "selection-stage2-stage3-save-and-target-handoff-complete"
+printf 'FINAL_PRODUCTION_USER_FLOW_PASS\nTARGET_SELECTION_CONTROL=PASS\nTARGET_POPUP_POPULATED=PASS\nTARGET_SELECTION_REFLECTED=PASS\nSTAGE2_EXECUTION=PASS\nSTAGE3_SAVE_CONTROL=PASS\nTARGET_PERSISTENCE=PASS\nTARGET_LAUNCH=PASS\nTARGET_FOREGROUND=PASS\nTARGET_HANDOFF_STATE=PASS\n' | tee "$EVIDENCE/PASS.txt"
