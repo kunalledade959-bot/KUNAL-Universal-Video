@@ -22,7 +22,7 @@ python3 pro_repair_v4.py
 
 test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
 test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
-grep -q '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+grep -q '\"status\": \"STATIC_AND_BUILD_VERIFIED\"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
 cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
 
 echo 'SELF_HEAL_BUILD_PASS'
@@ -44,6 +44,24 @@ printf 'no\n' | avdmanager create avd --force -n test --package 'system-images;a
 printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/test.avd/config.ini"
 test -f "$ANDROID_AVD_HOME/test.avd/config.ini"
 
+# GitHub-hosted Linux runners can expose /dev/kvm while leaving the runner
+# user outside the kvm group. Android x86_64 requires usable hardware
+# acceleration on current emulator releases, so fix the runner permission
+# deterministically instead of falling back to an unsupported software mode.
+echo 'KVM_PERMISSION_SETUP_START'
+id > e2e-kvm-before.txt
+ls -l /dev/kvm > e2e-kvm-before-ls.txt 2>&1 || true
+if [[ -e /dev/kvm ]]; then
+  sudo chmod 666 /dev/kvm
+fi
+ls -l /dev/kvm > e2e-kvm-after-ls.txt 2>&1 || true
+if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+  echo 'KVM_PERMISSION_SETUP_FAILED' > e2e-kvm-failure.txt
+  exit 42
+fi
+echo 'KVM_PERMISSION_SETUP_PASS' | tee e2e-kvm-ready.txt
+
+# Use emulator-managed acceleration selection after proving KVM is usable.
 echo 'Starting deterministic cold emulator.'
 emulator -avd test -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on >e2e-emulator.log 2>&1 &
 EMU_PID=$!
