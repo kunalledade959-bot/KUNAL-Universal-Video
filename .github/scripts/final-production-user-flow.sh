@@ -15,31 +15,15 @@ dump_ui(){
   local remote="/sdcard/kuv-ui.xml"
   local raw="${out}.raw"
   adbq shell rm -f "$remote" >/dev/null 2>&1 || true
-  if ! adbq shell uiautomator dump "$remote" > "$err" 2>&1; then
-    return 1
-  fi
-  if ! adbq exec-out cat "$remote" > "$raw" 2>>"$err"; then
-    return 1
-  fi
-  # Some Android emulator images append the UIAutomator status line even when
-  # a device output path is supplied. Extract exactly one hierarchy document,
-  # reject malformed/multiple documents, and expose only canonical XML.
+  if ! adbq shell uiautomator dump "$remote" > "$err" 2>&1; then return 1; fi
+  if ! adbq exec-out cat "$remote" > "$raw" 2>>"$err"; then return 1; fi
   python3 - "$raw" "$out" <<'PY'
 import sys
 from pathlib import Path
 import xml.etree.ElementTree as ET
-raw = Path(sys.argv[1]).read_bytes()
-start = raw.find(b'<?xml')
-end = raw.find(b'</hierarchy>', start)
-if start < 0 or end < 0:
-    raise SystemExit('UI_XML_PAYLOAD_MISSING')
-end += len(b'</hierarchy>')
-payload = raw[start:end]
-if raw[:start].strip() or raw[end:].strip():
-    # Prefix/suffix status text is tolerated only outside the XML payload.
-    pass
-ET.fromstring(payload)
-Path(sys.argv[2]).write_bytes(payload + b'\n')
+raw=Path(sys.argv[1]).read_bytes(); start=raw.find(b'<?xml'); end=raw.find(b'</hierarchy>',start)
+if start<0 or end<0: raise SystemExit('UI_XML_PAYLOAD_MISSING')
+end+=len(b'</hierarchy>'); payload=raw[start:end]; ET.fromstring(payload); Path(sys.argv[2]).write_bytes(payload+b'\n')
 PY
   rm -f "$raw"
   [[ -s "$out" ]] || return 1
@@ -60,30 +44,16 @@ capture_all(){
   dump_ui "$EVIDENCE/ui.xml" "$EVIDENCE/ui.err" || true
   {
     echo "ROOT_CAUSE_CLASSIFICATION"
-    if grep -Eiq 'Application Not Responding: com.android.systemui|System UI isn.t responding' "$EVIDENCE/windows.txt" "$EVIDENCE/ui.xml"; then
-      echo 'INFRASTRUCTURE: SYSTEMUI_ANR'
-    elif grep -Eiq 'FATAL EXCEPTION|Process: com\\.kunal\\.universalvideo.*has died|Fatal signal' "$EVIDENCE/crash-logcat.txt" "$EVIDENCE/logcat.txt"; then
-      echo 'RUNTIME: APP_OR_PLATFORM_CRASH'
-    elif ! grep -q 'com.kunal.universalvideo/.MainActivity' "$EVIDENCE/activity.txt"; then
-      echo 'APP: MAIN_ACTIVITY_NOT_FOREGROUND'
-    elif [[ ! -s "$EVIDENCE/ui.xml" ]]; then
-      echo 'INFRASTRUCTURE: UIAUTOMATOR_DUMP_UNAVAILABLE'
-    elif ! grep -Eq 'android.widget.Spinner' "$EVIDENCE/ui.xml"; then
-      echo 'APP: TARGET_SELECTION_CONTROL_MISSING'
-    elif [[ ! -s "$EVIDENCE/root-cause-trigger.txt" ]] || { ! grep -Fq 'TARGET=' "$EVIDENCE/root-cause-trigger.txt" && grep -Fq 'Target' "$EVIDENCE/root-cause-trigger.txt"; }; then
-      echo 'APP: TARGET_SELECTION_FLOW_FAILURE'
-    else
-      echo 'FUNCTIONAL: USER_FLOW_CONTRACT_FAILURE'
-    fi
+    if grep -Eiq 'Application Not Responding: com.android.systemui|System UI isn.t responding' "$EVIDENCE/windows.txt" "$EVIDENCE/ui.xml"; then echo 'INFRASTRUCTURE: SYSTEMUI_ANR'
+    elif grep -Eiq 'FATAL EXCEPTION|Process: com\\.kunal\\.universalvideo.*has died|Fatal signal' "$EVIDENCE/crash-logcat.txt" "$EVIDENCE/logcat.txt"; then echo 'RUNTIME: APP_OR_PLATFORM_CRASH'
+    elif ! grep -q 'com.kunal.universalvideo/.MainActivity' "$EVIDENCE/activity.txt"; then echo 'APP: MAIN_ACTIVITY_NOT_FOREGROUND'
+    elif [[ ! -s "$EVIDENCE/ui.xml" ]]; then echo 'INFRASTRUCTURE: UIAUTOMATOR_DUMP_UNAVAILABLE'
+    elif ! grep -Eq 'android.widget.Spinner' "$EVIDENCE/ui.xml"; then echo 'APP: TARGET_SELECTION_CONTROL_MISSING'
+    else echo 'FUNCTIONAL: USER_FLOW_CONTRACT_FAILURE'; fi
   } > "$EVIDENCE/root-cause-classification.txt"
 }
 
-fail(){
-  local reason="$1"
-  printf 'FINAL_USER_FLOW_FAIL: %s\n' "$reason" | tee "$EVIDENCE/FAIL.txt"
-  capture_all "$reason" || true
-  exit 1
-}
+fail(){ local reason="$1"; printf 'FINAL_USER_FLOW_FAIL: %s\n' "$reason" | tee "$EVIDENCE/FAIL.txt"; capture_all "$reason" || true; exit 1; }
 
 [[ -s "$APK" ]] || fail "APK missing"
 adbq wait-for-device >/dev/null || fail "ADB unavailable"
@@ -97,8 +67,7 @@ sleep 4
 dump_ui "$EVIDENCE/ui-initial.xml" "$EVIDENCE/ui-initial.err" || fail "Initial UI hierarchy unavailable"
 if python3 - "$EVIDENCE/ui-initial.xml" > "$EVIDENCE/spinner-center.txt" <<'PY'
 import sys,xml.etree.ElementTree as ET,re
-root=ET.parse(sys.argv[1]).getroot(); nodes=list(root.iter())
-sp=[n for n in nodes if n.attrib.get('class')=='android.widget.Spinner']
+root=ET.parse(sys.argv[1]).getroot(); nodes=list(root.iter()); sp=[n for n in nodes if n.attrib.get('class')=='android.widget.Spinner']
 if not sp: raise SystemExit('TARGET_SELECTION_CONTROL_MISSING')
 if not any('1 • START / DIAGNOSTIC' in n.attrib.get('text','') for n in nodes): raise SystemExit('STAGE1_CONTROL_MISSING')
 m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',sp[0].attrib.get('bounds',''))
@@ -143,8 +112,28 @@ sleep 2
 dump_ui "$EVIDENCE/ui-after-selection.xml" "$EVIDENCE/ui-after-selection.err" || fail "Post-selection UI hierarchy unavailable"
 grep -Fq "$TARGET" "$EVIDENCE/ui-after-selection.xml" || fail "Target selection was not reflected back in production UI"
 
-adbq shell run-as "$PKG" cat shared_prefs/kuv.xml > "$EVIDENCE/prefs.xml" 2>&1 || true
-if [[ -s "$EVIDENCE/prefs.xml" ]] && ! grep -Fq "$TARGET" "$EVIDENCE/prefs.xml"; then fail "UI showed a target but target_package was not persisted"; fi
+if python3 - "$EVIDENCE/ui-after-selection.xml" > "$EVIDENCE/stage3-save-center.txt" <<'PY'
+import sys,xml.etree.ElementTree as ET,re
+root=ET.parse(sys.argv[1]).getroot()
+for n in root.iter():
+    if n.attrib.get('text','')=='3 • SELECT / SAVE TARGET' and n.attrib.get('enabled','true')=='true' and n.attrib.get('clickable','true')=='true':
+        m=re.fullmatch(r'\[(\d+),(\d+)\]\[(\d+),(\d+)\]',n.attrib.get('bounds',''))
+        if m:
+            x1,y1,x2,y2=map(int,m.groups())
+            if x2>x1 and y2>y1: print((x1+x2)//2,(y1+y2)//2); break
+else: raise SystemExit('STAGE3_SAVE_CONTROL_NOT_FOUND')
+PY
+then :; else STATUS=$?; fail "Explicit Stage 3 save control unavailable (diagnostic=$STATUS)"; fi
+read -r SX SY < "$EVIDENCE/stage3-save-center.txt"
+adbq shell input tap "$SX" "$SY" || fail "Stage 3 save action failed"
+sleep 1
+dump_ui "$EVIDENCE/ui-after-save.xml" "$EVIDENCE/ui-after-save.err" || fail "Post-save UI hierarchy unavailable"
+grep -Fq "$TARGET" "$EVIDENCE/ui-after-save.xml" || fail "Stage 3 save action lost the selected target from production UI"
+
+adbq shell run-as "$PKG" cat shared_prefs/kuv.xml > "$EVIDENCE/prefs.txt" 2>&1 || fail "Target preference file could not be read after Stage 3 save"
+[[ -s "$EVIDENCE/prefs.txt" ]] || fail "Target preference file is empty after Stage 3 save"
+grep -Fq "$TARGET" "$EVIDENCE/prefs.txt" || fail "Stage 3 save action did not persist target_package"
+printf 'STAGE3_SAVE=PASS\nTARGET_PERSISTENCE=PASS\n' > "$EVIDENCE/stage3-save-result.txt"
 
 adbq shell cmd package resolve-activity --brief "$TARGET" > "$EVIDENCE/target-resolve.txt" 2>&1 || fail "Selected target package could not resolve a launch activity"
 if grep -Eq 'No activity found|priority=0.*No activity' "$EVIDENCE/target-resolve.txt"; then fail "Selected target has no resolvable launch activity"; fi
@@ -159,5 +148,5 @@ sleep 2
 dump_ui "$EVIDENCE/ui-after-target-handoff.xml" "$EVIDENCE/ui-after-target-handoff.err" || fail "Post-handoff controller UI hierarchy unavailable"
 grep -Fq "$TARGET" "$EVIDENCE/ui-after-target-handoff.xml" || fail "Selected target was lost after target-app handoff"
 
-capture_all "selection-and-target-handoff-complete"
-printf 'FINAL_PRODUCTION_USER_FLOW_PASS\nTARGET_SELECTION_CONTROL=PASS\nTARGET_POPUP_POPULATED=PASS\nTARGET_SELECTION_REFLECTED=PASS\nTARGET_LAUNCH=PASS\nTARGET_FOREGROUND=PASS\nTARGET_HANDOFF_STATE=PASS\n' | tee "$EVIDENCE/PASS.txt"
+capture_all "selection-stage3-save-and-target-handoff-complete"
+printf 'FINAL_PRODUCTION_USER_FLOW_PASS\nTARGET_SELECTION_CONTROL=PASS\nTARGET_POPUP_POPULATED=PASS\nTARGET_SELECTION_REFLECTED=PASS\nSTAGE3_SAVE_CONTROL=PASS\nTARGET_PERSISTENCE=PASS\nTARGET_LAUNCH=PASS\nTARGET_FOREGROUND=PASS\nTARGET_HANDOFF_STATE=PASS\n' | tee "$EVIDENCE/PASS.txt"
