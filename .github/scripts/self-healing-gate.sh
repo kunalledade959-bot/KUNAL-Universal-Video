@@ -45,7 +45,7 @@ printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/test.avd/config
 test -f "$ANDROID_AVD_HOME/test.avd/config.ini"
 
 echo 'Starting deterministic cold emulator.'
-emulator -avd test -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off >e2e-emulator.log 2>&1 &
+emulator -avd test -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on >e2e-emulator.log 2>&1 &
 EMU_PID=$!
 echo "$EMU_PID" > e2e-emulator.pid
 
