@@ -115,7 +115,7 @@ jobs:
           script: |
             set +e
             mkdir -p diagnostic
-            exec > >(tee diagnostic/emulator-run.log) 2>&1
+            exec > diagnostic/emulator-run.log 2>&1
             INSTALL_EXIT=99
             LAUNCH_EXIT=99
             APP_PID=""
