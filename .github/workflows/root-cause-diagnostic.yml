@@ -10,6 +10,7 @@ on:
       - '.github/scripts/**'
       - '.github/workflows/full-e2e-emulator.yml'
       - '.github/workflows/final-production-user-flow.yml'
+      - '.github/workflows/root-cause-diagnostic.yml'
 
 permissions:
   contents: read
