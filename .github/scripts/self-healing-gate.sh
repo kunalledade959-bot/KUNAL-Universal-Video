@@ -6,7 +6,7 @@ set -euo pipefail
 export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
 export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
 export ANDROID_AVD_HOME="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
-export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 
 mkdir -p "$ANDROID_AVD_HOME"
 rm -rf artifact
