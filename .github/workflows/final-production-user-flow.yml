@@ -100,14 +100,26 @@ jobs:
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           export ANDROID_SDK_ROOT="$ANDROID_HOME"
           export ANDROID_AVD_HOME="$HOME/.android/avd"
-          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
           mkdir -p "$ANDROID_AVD_HOME"
           adb kill-server || true
           adb start-server
           rm -rf "$ANDROID_AVD_HOME/final-user-flow.avd" "$ANDROID_AVD_HOME/final-user-flow.ini"
           printf 'no\n' | avdmanager create avd --force -n final-user-flow --package 'system-images;android-35;default;x86_64' --device 'pixel_2' > avd-create.log 2>&1
           printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/final-user-flow.avd/config.ini"
-          emulator -avd final-user-flow -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel off > final-user-flow-emulator.log 2>&1 &
+          echo 'KVM_PERMISSION_SETUP_START'
+          id > final-user-flow-kvm-before.txt
+          ls -l /dev/kvm > final-user-flow-kvm-before-ls.txt 2>&1 || true
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm
+          fi
+          ls -l /dev/kvm > final-user-flow-kvm-after-ls.txt 2>&1 || true
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            echo 'KVM_PERMISSION_SETUP_FAILED' > final-user-flow-kvm-failure.txt
+            exit 42
+          fi
+          echo 'KVM_PERMISSION_SETUP_PASS' | tee final-user-flow-kvm-ready.txt
+          emulator -avd final-user-flow -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > final-user-flow-emulator.log 2>&1 &
           echo $! > final-user-flow-emulator.pid
           deadline=$((SECONDS+900))
           while (( SECONDS < deadline )); do
@@ -144,5 +156,10 @@ jobs:
             avd-create.log
             final-user-flow-emulator.log
             final-user-flow-bluetooth-state.txt
+            final-user-flow-kvm-before.txt
+            final-user-flow-kvm-before-ls.txt
+            final-user-flow-kvm-after-ls.txt
+            final-user-flow-kvm-ready.txt
+            final-user-flow-kvm-failure.txt
           if-no-files-found: warn
           retention-days: 14
