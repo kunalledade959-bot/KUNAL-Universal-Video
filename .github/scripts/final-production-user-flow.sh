@@ -13,19 +13,36 @@ dump_ui(){
   local out="$1"
   local err="$2"
   local remote="/sdcard/kuv-ui.xml"
+  local raw="${out}.raw"
   adbq shell rm -f "$remote" >/dev/null 2>&1 || true
   if ! adbq shell uiautomator dump "$remote" > "$err" 2>&1; then
     return 1
   fi
-  if ! adbq exec-out cat "$remote" > "$out" 2>>"$err"; then
+  if ! adbq exec-out cat "$remote" > "$raw" 2>>"$err"; then
     return 1
   fi
-  [[ -s "$out" ]] || return 1
-  python3 - "$out" <<'PY'
+  # Some Android emulator images append the UIAutomator status line even when
+  # a device output path is supplied. Extract exactly one hierarchy document,
+  # reject malformed/multiple documents, and expose only canonical XML.
+  python3 - "$raw" "$out" <<'PY'
 import sys
+from pathlib import Path
 import xml.etree.ElementTree as ET
-ET.parse(sys.argv[1])
+raw = Path(sys.argv[1]).read_bytes()
+start = raw.find(b'<?xml')
+end = raw.find(b'</hierarchy>', start)
+if start < 0 or end < 0:
+    raise SystemExit('UI_XML_PAYLOAD_MISSING')
+end += len(b'</hierarchy>')
+payload = raw[start:end]
+if raw[:start].strip() or raw[end:].strip():
+    # Prefix/suffix status text is tolerated only outside the XML payload.
+    pass
+ET.fromstring(payload)
+Path(sys.argv[2]).write_bytes(payload + b'\n')
 PY
+  rm -f "$raw"
+  [[ -s "$out" ]] || return 1
 }
 
 capture_all(){
