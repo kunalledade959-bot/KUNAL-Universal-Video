@@ -9,6 +9,25 @@ exec > >(tee "$EVIDENCE/final-user-flow.log") 2>&1
 
 adbq(){ timeout 30s adb -s emulator-5554 "$@"; }
 
+dump_ui(){
+  local out="$1"
+  local err="$2"
+  local remote="/sdcard/kuv-ui.xml"
+  adbq shell rm -f "$remote" >/dev/null 2>&1 || true
+  if ! adbq shell uiautomator dump "$remote" > "$err" 2>&1; then
+    return 1
+  fi
+  if ! adbq exec-out cat "$remote" > "$out" 2>>"$err"; then
+    return 1
+  fi
+  [[ -s "$out" ]] || return 1
+  python3 - "$out" <<'PY'
+import sys
+import xml.etree.ElementTree as ET
+ET.parse(sys.argv[1])
+PY
+}
+
 capture_all(){
   local reason="${1:-unknown}"
   printf '%s\n' "$reason" > "$EVIDENCE/root-cause-trigger.txt"
@@ -21,12 +40,12 @@ capture_all(){
   adbq logcat -d -b crash > "$EVIDENCE/crash-logcat.txt" 2>&1 || true
   adbq logcat -d -t 3000 > "$EVIDENCE/logcat.txt" 2>&1 || true
   adbq exec-out screencap -p > "$EVIDENCE/screen.png" 2>/dev/null || true
-  adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui.xml" 2>"$EVIDENCE/ui.err" || true
+  dump_ui "$EVIDENCE/ui.xml" "$EVIDENCE/ui.err" || true
   {
     echo "ROOT_CAUSE_CLASSIFICATION"
     if grep -Eiq 'Application Not Responding: com.android.systemui|System UI isn.t responding' "$EVIDENCE/windows.txt" "$EVIDENCE/ui.xml"; then
       echo 'INFRASTRUCTURE: SYSTEMUI_ANR'
-    elif grep -Eiq 'FATAL EXCEPTION|Process: com\.kunal\.universalvideo.*has died|Fatal signal' "$EVIDENCE/crash-logcat.txt" "$EVIDENCE/logcat.txt"; then
+    elif grep -Eiq 'FATAL EXCEPTION|Process: com\\.kunal\\.universalvideo.*has died|Fatal signal' "$EVIDENCE/crash-logcat.txt" "$EVIDENCE/logcat.txt"; then
       echo 'RUNTIME: APP_OR_PLATFORM_CRASH'
     elif ! grep -q 'com.kunal.universalvideo/.MainActivity' "$EVIDENCE/activity.txt"; then
       echo 'APP: MAIN_ACTIVITY_NOT_FOREGROUND'
@@ -34,7 +53,7 @@ capture_all(){
       echo 'INFRASTRUCTURE: UIAUTOMATOR_DUMP_UNAVAILABLE'
     elif ! grep -Eq 'android.widget.Spinner' "$EVIDENCE/ui.xml"; then
       echo 'APP: TARGET_SELECTION_CONTROL_MISSING'
-    elif ! grep -Fq 'TARGET=' "$EVIDENCE/root-cause-trigger.txt" && grep -Fq 'Target' "$EVIDENCE/root-cause-trigger.txt"; then
+    elif [[ ! -s "$EVIDENCE/root-cause-trigger.txt" ]] || { ! grep -Fq 'TARGET=' "$EVIDENCE/root-cause-trigger.txt" && grep -Fq 'Target' "$EVIDENCE/root-cause-trigger.txt"; }; then
       echo 'APP: TARGET_SELECTION_FLOW_FAILURE'
     else
       echo 'FUNCTIONAL: USER_FLOW_CONTRACT_FAILURE'
@@ -58,7 +77,7 @@ adbq shell am start -W -n "$PKG/.MainActivity" > "$EVIDENCE/launch.txt" 2>&1 || 
 sleep 4
 [[ -n "$(adbq shell pidof "$PKG" | tr -d '\r' || true)" ]] || fail "Application process not alive"
 
-adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-initial.xml" 2>"$EVIDENCE/ui-initial.err" || fail "Initial UI hierarchy unavailable"
+dump_ui "$EVIDENCE/ui-initial.xml" "$EVIDENCE/ui-initial.err" || fail "Initial UI hierarchy unavailable"
 if python3 - "$EVIDENCE/ui-initial.xml" > "$EVIDENCE/spinner-center.txt" <<'PY'
 import sys,xml.etree.ElementTree as ET,re
 root=ET.parse(sys.argv[1]).getroot(); nodes=list(root.iter())
@@ -73,7 +92,7 @@ then :; else STATUS=$?; fail "Production target-selection control is missing or 
 read -r X Y < "$EVIDENCE/spinner-center.txt"
 adbq shell input tap "$X" "$Y" || fail "Target selection control could not be opened"
 sleep 2
-adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-selection-open.xml" 2>"$EVIDENCE/ui-selection-open.err" || fail "Selection popup hierarchy unavailable"
+dump_ui "$EVIDENCE/ui-selection-open.xml" "$EVIDENCE/ui-selection-open.err" || fail "Selection popup hierarchy unavailable"
 
 TARGET=""
 if grep -Fq 'com.android.settings' "$EVIDENCE/ui-selection-open.xml"; then TARGET="com.android.settings"; else
@@ -104,14 +123,12 @@ then :; else STATUS=$?; fail "Selected target row is not represented in popup hi
 read -r RX RY < "$EVIDENCE/target-center.txt"
 adbq shell input tap "$RX" "$RY" || fail "Target row tap failed"
 sleep 2
-adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-after-selection.xml" 2>"$EVIDENCE/ui-after-selection.err" || fail "Post-selection UI hierarchy unavailable"
+dump_ui "$EVIDENCE/ui-after-selection.xml" "$EVIDENCE/ui-after-selection.err" || fail "Post-selection UI hierarchy unavailable"
 grep -Fq "$TARGET" "$EVIDENCE/ui-after-selection.xml" || fail "Target selection was not reflected back in production UI"
 
 adbq shell run-as "$PKG" cat shared_prefs/kuv.xml > "$EVIDENCE/prefs.xml" 2>&1 || true
 if [[ -s "$EVIDENCE/prefs.xml" ]] && ! grep -Fq "$TARGET" "$EVIDENCE/prefs.xml"; then fail "UI showed a target but target_package was not persisted"; fi
 
-# Prove the selected target is not merely displayed. Resolve and launch the real
-# selected package, then prove Android actually put that target in the foreground.
 adbq shell cmd package resolve-activity --brief "$TARGET" > "$EVIDENCE/target-resolve.txt" 2>&1 || fail "Selected target package could not resolve a launch activity"
 if grep -Eq 'No activity found|priority=0.*No activity' "$EVIDENCE/target-resolve.txt"; then fail "Selected target has no resolvable launch activity"; fi
 adbq shell monkey -p "$TARGET" -c android.intent.category.LAUNCHER 1 > "$EVIDENCE/target-launch.txt" 2>&1 || fail "Selected target launch command failed"
@@ -120,11 +137,9 @@ FOCUS="$(adbq shell dumpsys activity activities | grep -m1 -E 'mResumedActivity|
 printf '%s\n' "$FOCUS" > "$EVIDENCE/target-foreground.txt"
 grep -Fq "$TARGET" "$EVIDENCE/target-foreground.txt" || fail "Selected target was not brought to the real foreground"
 
-# Return to KUNAL Universal Video and prove the selection survives the real target
-# handoff. This catches a class of state-loss bugs invisible to component E2E.
 adbq shell am start -W -n "$PKG/.MainActivity" > "$EVIDENCE/return-to-controller.txt" 2>&1 || fail "Controller could not be restored after target handoff"
 sleep 2
-adbq exec-out uiautomator dump /dev/tty > "$EVIDENCE/ui-after-target-handoff.xml" 2>"$EVIDENCE/ui-after-target-handoff.err" || fail "Post-handoff controller UI hierarchy unavailable"
+dump_ui "$EVIDENCE/ui-after-target-handoff.xml" "$EVIDENCE/ui-after-target-handoff.err" || fail "Post-handoff controller UI hierarchy unavailable"
 grep -Fq "$TARGET" "$EVIDENCE/ui-after-target-handoff.xml" || fail "Selected target was lost after target-app handoff"
 
 capture_all "selection-and-target-handoff-complete"
