@@ -94,6 +94,12 @@ jobs:
             echo "=== preflight_patch.py ==="
             python3 preflight_patch.py
             echo "preflight_exit=$?"
+            echo "=== constructor_lifecycle_patch.py ==="
+            python3 constructor_lifecycle_patch.py
+            echo "constructor_exit=$?"
+            echo "=== stage11_hardening_v2.py ==="
+            python3 stage11_hardening_v2.py
+            echo "stage11_exit=$?"
             echo "=== canonical activity checks ==="
             grep -nE 'queryIntentActivities|CATEGORY_LAUNCHER|getLaunchIntentForPackage|mainHandler|getInstalledApplications' activity_fixed.kt
             echo "=== production builder ==="
