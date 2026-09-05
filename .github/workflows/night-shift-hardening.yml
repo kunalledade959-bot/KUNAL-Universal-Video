@@ -238,12 +238,21 @@ jobs:
             fi
             repair_once "$REPAIR_CYCLES" || exit $?
 
-            # The repair is never considered valid until the complete production gates prove it.
             VERIFY_ROUND="repair-$REPAIR_CYCLES-verification"
             if ! run_round "$VERIFY_ROUND"; then
               echo 'REPAIR_DID_NOT_CLOSE_ROOT_CAUSE' > "night-shift-evidence/repair-$REPAIR_CYCLES/result.txt"
               git reset --hard HEAD >/dev/null
               exit 31
+            fi
+
+            # A repair becomes part of production only after a complete clean verification.
+            # Persist it before any continuation run so a fresh runner cannot lose the fix.
+            git diff --check
+            git status --short > "night-shift-evidence/repair-$REPAIR_CYCLES/verified-status.txt"
+            if ! git diff --quiet || [[ -n "$(git status --porcelain)" ]]; then
+              git add -A
+              git commit -m "fix: verified night shift repair cycle $REPAIR_CYCLES" >/dev/null
+              git push origin HEAD:main
             fi
             CLEAN_ROUNDS=1
             echo "CLEAN_ROUNDS=$CLEAN_ROUNDS" | tee night-shift-evidence/progress.txt
@@ -254,20 +263,9 @@ jobs:
             test -s e2e-PASS.txt
             grep -q 'PASS' e2e-PASS.txt
             git diff --check
-            git status --short
-            git config user.name 'kunalledade959-bot'
-            git config user.email 'kunalledade959-bot@users.noreply.github.com'
-            if ! git diff --quiet || [[ -n "$(git status --porcelain)" ]]; then
-              git add -A
-              git commit -m 'chore: record verified night shift hardening completion' >/dev/null
-              git push origin HEAD:main
-            fi
             exit 0
           fi
 
-          # Continue as a fresh GitHub Actions run so the six-hour job ceiling never becomes
-          # the artificial stopping point. The verified counter is passed explicitly. A failure
-          # always resets it to zero before the next continuation.
           gh workflow run night-shift-hardening.yml \
             --ref main \
             -f clean_rounds="$CLEAN_ROUNDS" \
