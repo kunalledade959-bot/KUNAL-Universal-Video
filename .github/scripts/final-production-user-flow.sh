@@ -81,10 +81,9 @@ x1,y1,x2,y2=map(int,m.groups()); print((x1+x2)//2,(y1+y2)//2)
 PY
 then :; else STATUS=$?; fail "Production target-selection controls are missing or malformed (diagnostic=$STATUS)"; fi
 
-# Stage 2 is a real prerequisite of Stage 3. The previous gate jumped from
-# target selection directly to Stage 3, while StageGate correctly rejected it.
-# Prepare the fresh emulator's declared accessibility service, then execute the
-# actual production Stage 2 button so the app itself validates the connection.
+# Stage 2 is a real prerequisite of Stage 3. Prepare the fresh emulator's declared
+# accessibility service, then execute the actual production Stage 2 button so the
+# app itself validates the connection.
 adbq shell settings put secure enabled_accessibility_services "$SERVICE" > "$EVIDENCE/accessibility-enable.txt" 2>&1 || fail "Could not configure emulator accessibility service"
 adbq shell settings put secure accessibility_enabled 1 >> "$EVIDENCE/accessibility-enable.txt" 2>&1 || fail "Could not enable emulator accessibility"
 sleep 3
@@ -92,8 +91,6 @@ ACCESS_STATE="$(adbq shell settings get secure enabled_accessibility_services | 
 printf 'EXPECTED_SERVICE=%s\nACTUAL_SERVICES=%s\n' "$SERVICE" "$ACCESS_STATE" > "$EVIDENCE/accessibility-pre-stage2.txt"
 grep -Fq "$SERVICE" <<<"$ACCESS_STATE" || fail "Declared Accessibility service did not become enabled before Stage 2"
 adbq shell dumpsys accessibility > "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" 2>&1 || fail "Accessibility diagnostics unavailable before Stage 2"
-# Android's settings API accepts the short component form above, while
-# dumpsys accessibility reports the fully-qualified package component.
 grep -Fq "$SERVICE_CANONICAL" "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered in the running accessibility manager"
 
 if python3 - "$EVIDENCE/ui-initial.xml" > "$EVIDENCE/stage2-center.txt" <<'PY'
@@ -112,7 +109,10 @@ read -r C2X C2Y < "$EVIDENCE/stage2-center.txt"
 adbq shell input tap "$C2X" "$C2Y" || fail "Stage 2 connect action failed"
 sleep 2
 dump_ui "$EVIDENCE/ui-after-stage2.xml" "$EVIDENCE/ui-after-stage2.err" || fail "Post-Stage 2 UI hierarchy unavailable"
-grep -Eq 'Stage 2 (PASS|READY)' "$EVIDENCE/ui-after-stage2.xml" || fail "Stage 2 did not report a successful connection state"
+# StageGate exposes the result through the next-stage header. A successful Stage 2
+# transition makes Stage 3 READY. The previous matcher incorrectly searched for a
+# literal 'Stage 2 PASS/READY' string that production UI never renders.
+grep -Eq 'Stage 3 • READY • (true|false)' "$EVIDENCE/ui-after-stage2.xml" || fail "Stage 2 did not unlock Stage 3 in the production state machine"
 ACCESS_STATE_AFTER="$(adbq shell settings get secure enabled_accessibility_services | tr -d '\r' || true)"
 printf 'STAGE2_ACCESSIBILITY_STATE=%s\n' "$ACCESS_STATE_AFTER" > "$EVIDENCE/stage2-accessibility-state.txt"
 grep -Fq "$SERVICE" <<<"$ACCESS_STATE_AFTER" || fail "Accessibility service disappeared after Stage 2 connect"
