@@ -1,0 +1,290 @@
+name: KUNAL Night Shift Hardening
+
+on:
+  workflow_dispatch:
+    inputs:
+      clean_rounds:
+        description: 'Verified consecutive production rounds already completed'
+        required: false
+        default: '0'
+        type: string
+      repair_cycles:
+        description: 'Repair cycles already consumed'
+        required: false
+        default: '0'
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - .github/NIGHT_SHIFT_NOW
+
+concurrency:
+  group: kunal-universal-video-night-shift
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+  actions: read
+  copilot-requests: write
+
+jobs:
+  harden:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    env:
+      TARGET_CLEAN_ROUNDS: '30'
+      MAX_REPAIR_CYCLES: '30'
+      ROUNDS_PER_RUN: '2'
+    steps:
+      - name: Checkout exact production head
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK deterministically
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +o pipefail
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          LICENSE_STATUS=${PIPESTATUS[1]}
+          set -o pipefail
+          test "$LICENSE_STATUS" = 0
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+
+      - name: Install production repair agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version
+          gh --version
+
+      - name: Deep recursive repository audit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p night-shift-evidence/audit
+          git status --short > night-shift-evidence/audit/git-status.txt
+          git diff --check > night-shift-evidence/audit/git-diff-check.txt
+          git ls-files > night-shift-evidence/audit/tracked-files.txt
+          find . -type f \
+            -not -path './.git/*' \
+            -not -path './.gradle/*' \
+            -not -path './build/*' \
+            -not -path './artifact/*' \
+            -print | sort > night-shift-evidence/audit/all-files.txt
+          grep -RInE 'TODO|FIXME|HACK|TEMPORARY|TEMP_FIX|DISABLE.*CHECK|SKIP.*CHECK|ALLOW.*FAIL' \
+            --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=build --exclude-dir=artifact . \
+            > night-shift-evidence/audit/suspicious-markers.txt || true
+          bash -n .github/scripts/*.sh
+          python3 -m py_compile *.py 2>night-shift-evidence/audit/python-syntax-errors.txt || {
+            cat night-shift-evidence/audit/python-syntax-errors.txt
+            exit 1
+          }
+          git grep -n 'UniversalAccessibilityService\|StageGate\|TARGET\|MediaProjection\|TTS\|assemble' \
+            -- '*.kt' '*.java' '*.sh' '*.py' '*.yml' '*.yaml' \
+            > night-shift-evidence/audit/critical-symbols.txt || true
+
+      - name: Run verified production hardening rounds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_CLEAN_ROUNDS: ${{ inputs.clean_rounds || '0' }}
+          INPUT_REPAIR_CYCLES: ${{ inputs.repair_cycles || '0' }}
+        shell: bash
+        run: |
+          set -u -o pipefail
+          CLEAN_ROUNDS="${INPUT_CLEAN_ROUNDS:-0}"
+          REPAIR_CYCLES="${INPUT_REPAIR_CYCLES:-0}"
+          mkdir -p night-shift-evidence
+          echo "$CLEAN_ROUNDS" > night-shift-evidence/starting-clean-rounds.txt
+          echo "$REPAIR_CYCLES" > night-shift-evidence/starting-repair-cycles.txt
+
+          run_round() {
+            local round="$1"
+            local dir="night-shift-evidence/round-$round"
+            mkdir -p "$dir"
+            git status --short > "$dir/before-status.txt" 2>&1 || true
+            git rev-parse HEAD > "$dir/head-before.txt"
+            git diff --check > "$dir/diff-check-before.txt" 2>&1 || true
+
+            rm -f e2e-PASS.txt
+            set +e
+            bash .github/scripts/self-healing-gate.sh > "$dir/self-healing-gate.log" 2>&1
+            local gate=$?
+            set -e
+            echo "$gate" > "$dir/self-healing-gate-exit.txt"
+            cp e2e-*.txt "$dir/" 2>/dev/null || true
+            cp e2e-*.log "$dir/" 2>/dev/null || true
+            cp e2e-*.xml "$dir/" 2>/dev/null || true
+            if [[ "$gate" != 0 ]]; then
+              echo 'ROUND_FAIL_SELF_HEALING_GATE' > "$dir/result.txt"
+              return 10
+            fi
+            test -s e2e-PASS.txt
+
+            set +e
+            bash .github/scripts/final-production-user-flow.sh > "$dir/final-production-user-flow.log" 2>&1
+            local flow=$?
+            set -e
+            echo "$flow" > "$dir/final-flow-exit.txt"
+            cp FINAL_PRODUCTION_USER_FLOW_*.txt "$dir/" 2>/dev/null || true
+            if [[ "$flow" != 0 ]]; then
+              echo 'ROUND_FAIL_FINAL_PRODUCTION_USER_FLOW' > "$dir/result.txt"
+              return 11
+            fi
+
+            test -s e2e-PASS.txt
+            grep -q 'PASS' e2e-PASS.txt
+            git diff --check
+            git status --short > "$dir/after-status.txt"
+            git rev-parse HEAD > "$dir/head-after.txt"
+            echo 'ROUND_VERIFIED_CLEAN' > "$dir/result.txt"
+            return 0
+          }
+
+          repair_once() {
+            local cycle="$1"
+            local dir="night-shift-evidence/repair-$cycle"
+            mkdir -p "$dir"
+            local base_sha
+            base_sha="$(git rev-parse HEAD)"
+            echo "$base_sha" > "$dir/base-sha.txt"
+
+            set +e
+            copilot --autopilot --yolo --max-autopilot-continues 20 -p "
+            You are the senior production Android reliability engineer for KUNAL Universal Video.
+            This is permanent Night Shift repair cycle $cycle.
+
+            Work only from proven evidence in night-shift-evidence, especially the latest failed round,
+            the authoritative self-healing gate log, the final production user-flow log, current source,
+            StageGate, activity_fixed.kt, UniversalAccessibilityService, all .github/scripts, and all
+            workflow files. Recursively inspect the relevant dependency chain before changing anything.
+
+            Find the FIRST proven root cause, not merely the final symptom. Classify it as application,
+            test-contract, emulator/ADB, build/configuration, or workflow infrastructure. Trace the exact
+            data/control path that proves the classification.
+
+            Choose the single strongest production-grade correction. Rank candidate mechanisms by:
+            correctness, Android lifecycle semantics, determinism, idempotence, observability,
+            maintainability, isolation of failures, and compatibility with the existing 13-stage design.
+            Do not choose a workaround merely because it is easier.
+
+            HARD RULES:
+            - Never weaken, delete, skip, bypass, or rewrite an assertion to make CI green.
+            - Never manufacture e2e-PASS.txt or PASS markers.
+            - Never hide real errors with || true unless the command is diagnostic-only and cannot affect
+              the gate result.
+            - Never replace real app behavior with a fake test-only success path.
+            - Preserve target selection/persistence, Accessibility, MediaProjection, TTS/audio,
+              assembly, verification, gallery behavior, and the 13-stage state machine.
+            - Do not touch secrets or credentials.
+            - Make only changes required for the proven root cause.
+            - Do not commit or push. The controller does that only after verification.
+
+            After editing, run all relevant static checks available locally. Write
+            night-shift-evidence/repair-$cycle/repair.md with: proven evidence, root cause,
+            candidate mechanisms, selected mechanism and why it is strongest, exact changed files,
+            checks run, and the exact gate evidence required to close the issue.
+            " > "$dir/copilot.log" 2>&1
+            local status=$?
+            set -e
+            echo "$status" > "$dir/copilot-exit.txt"
+            if [[ "$status" != 0 ]]; then
+              echo 'REPAIR_AGENT_FAILED' > "$dir/result.txt"
+              git reset --hard "$base_sha" >/dev/null
+              return 20
+            fi
+            git diff --check > "$dir/diff-check.txt" 2>&1 || {
+              echo 'REPAIR_DIFF_CHECK_FAILED' > "$dir/result.txt"
+              git reset --hard "$base_sha" >/dev/null
+              return 21
+            }
+            git diff > "$dir/repair.diff"
+            return 0
+          }
+
+          for slot in $(seq 1 "$ROUNDS_PER_RUN"); do
+            if (( CLEAN_ROUNDS >= TARGET_CLEAN_ROUNDS )); then break; fi
+            ROUND=$((CLEAN_ROUNDS + 1))
+            if run_round "$ROUND"; then
+              CLEAN_ROUNDS=$ROUND
+              echo "CLEAN_ROUNDS=$CLEAN_ROUNDS" | tee night-shift-evidence/progress.txt
+              continue
+            fi
+
+            CLEAN_ROUNDS=0
+            REPAIR_CYCLES=$((REPAIR_CYCLES + 1))
+            echo "CLEAN_ROUNDS_RESET_AFTER_FAILURE=1" | tee -a night-shift-evidence/progress.txt
+            if (( REPAIR_CYCLES > MAX_REPAIR_CYCLES )); then
+              echo 'NIGHT_SHIFT_REPAIR_LIMIT_EXHAUSTED' >&2
+              exit 30
+            fi
+            repair_once "$REPAIR_CYCLES" || exit $?
+
+            # The repair is never considered valid until the complete production gates prove it.
+            VERIFY_ROUND="repair-$REPAIR_CYCLES-verification"
+            if ! run_round "$VERIFY_ROUND"; then
+              echo 'REPAIR_DID_NOT_CLOSE_ROOT_CAUSE' > "night-shift-evidence/repair-$REPAIR_CYCLES/result.txt"
+              git reset --hard HEAD >/dev/null
+              exit 31
+            fi
+            CLEAN_ROUNDS=1
+            echo "CLEAN_ROUNDS=$CLEAN_ROUNDS" | tee night-shift-evidence/progress.txt
+          done
+
+          if (( CLEAN_ROUNDS >= TARGET_CLEAN_ROUNDS )); then
+            echo 'NIGHT_SHIFT_30_CONSECUTIVE_PRODUCTION_ROUNDS_PASS' | tee night-shift-evidence/NIGHT_SHIFT_PASS.txt
+            test -s e2e-PASS.txt
+            grep -q 'PASS' e2e-PASS.txt
+            git diff --check
+            git status --short
+            git config user.name 'kunalledade959-bot'
+            git config user.email 'kunalledade959-bot@users.noreply.github.com'
+            if ! git diff --quiet || [[ -n "$(git status --porcelain)" ]]; then
+              git add -A
+              git commit -m 'chore: record verified night shift hardening completion' >/dev/null
+              git push origin HEAD:main
+            fi
+            exit 0
+          fi
+
+          # Continue as a fresh GitHub Actions run so the six-hour job ceiling never becomes
+          # the artificial stopping point. The verified counter is passed explicitly. A failure
+          # always resets it to zero before the next continuation.
+          gh workflow run night-shift-hardening.yml \
+            --ref main \
+            -f clean_rounds="$CLEAN_ROUNDS" \
+            -f repair_cycles="$REPAIR_CYCLES"
+          echo 'NIGHT_SHIFT_CONTINUATION_DISPATCHED'
+
+      - name: Upload complete Night Shift evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-Universal-Video-night-shift-${{ github.run_id }}
+          path: |
+            night-shift-evidence/
+            e2e-*.txt
+            e2e-*.log
+            e2e-*.xml
+            e2e-*.json
+            FINAL_PRODUCTION_USER_FLOW_*.txt
+          if-no-files-found: ignore
+          retention-days: 30
