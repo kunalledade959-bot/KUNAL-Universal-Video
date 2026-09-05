@@ -5,6 +5,7 @@ EVIDENCE="$ROOT/final-user-flow-evidence"
 APK="artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk"
 PKG="com.kunal.universalvideo"
 SERVICE="$PKG/.UniversalAccessibilityService"
+SERVICE_CANONICAL="$PKG/$PKG.UniversalAccessibilityService"
 mkdir -p "$EVIDENCE" artifact
 exec > >(tee "$EVIDENCE/final-user-flow.log") 2>&1
 
@@ -91,7 +92,9 @@ ACCESS_STATE="$(adbq shell settings get secure enabled_accessibility_services | 
 printf 'EXPECTED_SERVICE=%s\nACTUAL_SERVICES=%s\n' "$SERVICE" "$ACCESS_STATE" > "$EVIDENCE/accessibility-pre-stage2.txt"
 grep -Fq "$SERVICE" <<<"$ACCESS_STATE" || fail "Declared Accessibility service did not become enabled before Stage 2"
 adbq shell dumpsys accessibility > "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" 2>&1 || fail "Accessibility diagnostics unavailable before Stage 2"
-grep -Fq "$PKG/.UniversalAccessibilityService" "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered in the running accessibility manager"
+# Android's settings API accepts the short component form above, while
+# dumpsys accessibility reports the fully-qualified package component.
+grep -Fq "$SERVICE_CANONICAL" "$EVIDENCE/accessibility-pre-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered in the running accessibility manager"
 
 if python3 - "$EVIDENCE/ui-initial.xml" > "$EVIDENCE/stage2-center.txt" <<'PY'
 import sys,xml.etree.ElementTree as ET,re
@@ -114,7 +117,7 @@ ACCESS_STATE_AFTER="$(adbq shell settings get secure enabled_accessibility_servi
 printf 'STAGE2_ACCESSIBILITY_STATE=%s\n' "$ACCESS_STATE_AFTER" > "$EVIDENCE/stage2-accessibility-state.txt"
 grep -Fq "$SERVICE" <<<"$ACCESS_STATE_AFTER" || fail "Accessibility service disappeared after Stage 2 connect"
 adbq shell dumpsys accessibility > "$EVIDENCE/accessibility-post-stage2-dumpsys.txt" 2>&1 || fail "Accessibility diagnostics unavailable after Stage 2"
-grep -Fq "$PKG/.UniversalAccessibilityService" "$EVIDENCE/accessibility-post-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered after Stage 2 connect"
+grep -Fq "$SERVICE_CANONICAL" "$EVIDENCE/accessibility-post-stage2-dumpsys.txt" || fail "Production AccessibilityService is not registered after Stage 2 connect"
 printf 'STAGE2_EXECUTION=PASS\n' > "$EVIDENCE/stage2-result.txt"
 
 read -r X Y < "$EVIDENCE/spinner-center.txt"
