@@ -31,33 +31,44 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Java 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: '17'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "8.10.2"
+          gradle-version: '8.10.2'
 
       - name: Bootstrap Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
 
       - name: Install Android SDK components
         shell: bash
         run: |
-          set +e
+          set -euo pipefail
           mkdir -p diagnostic
-          {
-            echo "=== sdkmanager --list_installed ==="
-            sdkmanager --list_installed || true
-            echo "=== licenses ==="
-            yes | sdkmanager --licenses >/dev/null 2>&1 || true
-            echo "=== install ==="
-            sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
-            echo "sdk_install_exit=$?"
-          } > diagnostic/sdk-bootstrap.log 2>&1
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          set +e
+          yes | "$SDKMANAGER" --licenses >diagnostic/sdk-licenses.log 2>&1
+          PS=(${PIPESTATUS[@]})
+          set -e
+          cat diagnostic/sdk-licenses.log
+          echo "LICENSE_YES_EXIT=${PS[0]}"
+          echo "LICENSE_SDKMANAGER_EXIT=${PS[1]}"
+          (( PS[1] == 0 ))
+          "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator'
+          "$SDKMANAGER" --list_installed > diagnostic/sdk-installed.txt 2>&1
+          grep -Fq 'platform-tools' diagnostic/sdk-installed.txt
+          grep -Fq 'platforms;android-35' diagnostic/sdk-installed.txt
+          grep -Fq 'build-tools;35.0.0' diagnostic/sdk-installed.txt
+          grep -Fq 'emulator' diagnostic/sdk-installed.txt
 
       - name: Capture repository and toolchain state
         shell: bash
@@ -127,7 +138,8 @@ jobs:
           set +e
           mkdir -p diagnostic
           SYSTEM_EVIDENCE=0
-          grep -q 'com.android.systemui\|system_server\|com.android.bluetooth\|DeadSystemException\|Application Not Responding\|ANR in' diagnostic/relevant-logcat.txt 2>/dev/null && SYSTEM_EVIDENCE=1
+          if grep -Eiq 'Application Not Responding: (com\.android\.systemui|system_server)|System UI isn.t responding|DeadSystemException|Fatal signal|Emulator.*crash|qemu.*fatal|adb.*offline|device.*offline' \
+              diagnostic/relevant-logcat.txt diagnostic/boundary-results.txt diagnostic/emulator.log 2>/dev/null; then SYSTEM_EVIDENCE=1; fi
           {
             echo "# ROOT CAUSE DIAGNOSTIC"
             echo
@@ -135,7 +147,8 @@ jobs:
             echo "Known-good baseline: a8dab7f10eb14c8888d9ff8cd01398aec4bbfcf2"
             echo
             echo "## Boundary classification"
-            if ! test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk; then
+            BUILD_RC="$(grep -Eo '^builder_exit=[0-9]+' diagnostic/build.log 2>/dev/null | tail -n1 | cut -d= -f2)"
+            if [[ ! "$BUILD_RC" =~ ^0$ ]] || ! test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk; then
               echo "FIRST_FAILING_BOUNDARY=BUILD"
               echo "CLASSIFICATION=BUILD_FAILURE"
             elif ! grep -q '^INSTALL_EXIT=0$' diagnostic/boundary-results.txt 2>/dev/null; then
@@ -155,15 +168,20 @@ jobs:
               echo "CLASSIFICATION=PASS"
             fi
             echo
+            echo "## Exact observed failure lines"
+            grep -E -i 'builder_exit=|install|launch|UI_DUMP_EXIT|FAIL|ERROR|Exception|FATAL|ANR|offline|crash|No target|Accessibility' \
+              diagnostic/build.log diagnostic/boundary-results.txt diagnostic/relevant-logcat.txt 2>/dev/null | tail -n 240 || true
+            echo
             echo "## Observed evidence"
             test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk && echo "APK_PRESENT=1" || echo "APK_PRESENT=0"
             cat diagnostic/boundary-results.txt 2>/dev/null || echo "BOUNDARY_RESULTS=UNAVAILABLE"
             echo "SYSTEM_ERROR_EVIDENCE=$SYSTEM_EVIDENCE"
             test -s diagnostic/ui-hierarchy.xml && echo "UI_HIERARCHY_CAPTURED=1" || echo "UI_HIERARCHY_CAPTURED=0"
             echo
-            echo "## Rule"
-            echo "This run performs diagnosis only. It does not invoke AutoRepair, Final Production User Flow, or any automatic code repair."
-            echo "The first failing boundary and its complete evidence are the basis for the next root-cause change."
+            echo "## Repair contract"
+            echo "Repair only the first failing boundary. Use the exact observed failure lines above as the evidence contract."
+            echo "Do not weaken assertions, skip checks, manufacture PASS markers, or classify generic system_server log lines as a system failure."
+            echo "If no deterministic failure evidence exists, status is UNVERIFIED, not PASS."
           } > diagnostic/ROOT_CAUSE_REPORT.md
 
       - name: Upload one complete diagnostic artifact
