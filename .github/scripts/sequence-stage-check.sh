@@ -27,7 +27,7 @@ fail(){ echo "RESULT=FAIL"; echo "STAGE=$STAGE"; echo "LABEL=$label"; echo "REAS
 [ -s "$ZIP" ] || fail "PACKAGE_FILE_MISSING:$ZIP"
 grep -Eq "private fun ${fn}\\(" "$SRC" || fail "FUNCTION_MISSING:$fn"
 if [ "$STAGE" -gt 1 ]; then
-grep -Eq "if\\(!begin\\(${STAGE}\\)\\)return" "$SRC" || fail "STAGE_GATE_MISSING:$STAGE"
+grep -Eq "if[[:space:]]*\\([[:space:]]*!?[[:space:]]*begin[[:space:]]*\\(${STAGE}\\)[[:space:]]*\\)[[:space:]]*return" "$SRC" || fail "STAGE_GATE_MISSING:$STAGE"
 fi
 for p in "${checks[@]}"; do
 grep -Fq "$p" "$SRC" || fail "SOURCE_CONTRACT_MISSING:$p"
