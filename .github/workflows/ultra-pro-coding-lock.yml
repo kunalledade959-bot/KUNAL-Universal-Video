@@ -1,0 +1,105 @@
+name: Ultra Pro Coding Lock
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kunal-ultra-pro-coding-lock-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ultra-pro-coding-lock:
+    name: Ultra Pro Coding Lock
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Checkout exact change
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
+
+      - name: Install exact Android components
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
+          "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
+
+      - name: Static zero-bypass gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -x .github/scripts/self-healing-gate.sh
+          test -x .github/scripts/final-production-user-flow.sh
+          test -x .github/scripts/sequence-stage-check.sh
+          bash -n .github/scripts/*.sh
+          python3 -m py_compile *.py
+          if grep -RInE --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude='*.apk' --exclude='*.png' '(SKIP CHECK|ALLOW FAIL|DISABLE CHECK|TEMP_FIX|ignore failure|continue-on-error:[[:space:]]*true)' .; then
+            echo 'ZERO_BYPASS_TOKEN_FOUND'
+            exit 1
+          fi
+          bash .github/scripts/sequence-stage-check.sh
+          grep -RIn 'UniversalAccessibilityService' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+          grep -RIn 'StageGate' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+          grep -RIn 'MediaProjection' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+          grep -RIn 'TextToSpeech' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+
+      - name: Authoritative production build + full emulator E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/self-healing-gate.sh
+          test -s artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          test -s e2e-PASS.txt
+
+      - name: Production Stage 2 → Stage 3 → target handoff flow
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/final-production-user-flow.sh
+          test -s final-user-flow-evidence/PASS.txt
+          grep -Fq 'FINAL_PRODUCTION_USER_FLOW_PASS' final-user-flow-evidence/PASS.txt
+          grep -Fq 'TARGET_PERSISTENCE=PASS' final-user-flow-evidence/PASS.txt
+          grep -Fq 'TARGET_FOREGROUND=PASS' final-user-flow-evidence/PASS.txt
+
+      - name: Final evidence integrity gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -Fq '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          test -s final-user-flow-evidence/final-user-flow.log
+          test -s final-user-flow-evidence/ui-after-stage2.xml
+          test -s final-user-flow-evidence/ui-after-save.xml
+          test -s final-user-flow-evidence/prefs.txt
+          test -s final-user-flow-evidence/accessibility-post-stage2-dumpsys.txt
+          if grep -Eiq 'FATAL EXCEPTION|ANR in|Application Not Responding|DeadSystemException|Fatal signal' final-user-flow-evidence/final-user-flow.log final-user-flow-evidence/crash-logcat.txt; then
+            echo 'CRASH_OR_ANR_FOUND_IN_REQUIRED_FLOW'
+            exit 1
+          fi
+          echo 'ULTRA_PRO_CODING_LOCK_PASS'
