@@ -30,7 +30,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - name: Java 17 + Gradle 8.10.2
         uses: actions/setup-java@v5
         with:
@@ -39,23 +38,27 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.10.2'
-
       - name: Android SDK
         uses: android-actions/setup-android@v3
         with:
           cmdline-tools-version: 12266719
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: true
-
       - name: Install exact Android test surface
         shell: bash
         run: |
           set -euo pipefail
           SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
           [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
+          set +e
+          yes | "$SDKMANAGER" --licenses >/tmp/sdk-licenses.log 2>&1
+          PS=(${PIPESTATUS[@]})
+          set -e
+          cat /tmp/sdk-licenses.log
+          echo "LICENSE_YES_EXIT=${PS[0]}"
+          echo "LICENSE_SDKMANAGER_EXIT=${PS[1]}"
+          (( PS[1] == 0 ))
           "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
-
       - name: Static audit with real stage contract arguments
         shell: bash
         run: |
@@ -64,26 +67,18 @@ jobs:
           FAIL=0
           {
             echo "COMMIT=$(git rev-parse HEAD)"
-            echo '=== SHELL SYNTAX ==='
             for f in .github/scripts/*.sh *.sh; do [[ -f "$f" ]] || continue; bash -n "$f"; rc=$?; echo "SHELL $rc $f"; ((rc==0)) || FAIL=1; done
-            echo '=== PYTHON SYNTAX ==='
             for f in *.py; do [[ -f "$f" ]] || continue; python3 -m py_compile "$f"; rc=$?; echo "PYTHON $rc $f"; ((rc==0)) || FAIL=1; done
-            echo '=== REQUIRED PRODUCTION SYMBOLS ==='
             for p in UniversalAccessibilityService StageGate TARGET MediaProjection TextToSpeech queryIntentActivities getLaunchIntentForPackage; do
               grep -RIn --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude-dir=forensic "$p" . >/tmp/hits 2>&1 || { echo "MISSING $p"; FAIL=1; continue; }
               echo "PRESENT $p"; head -n 5 /tmp/hits
             done
-            echo '=== 13-STAGE CONTRACTS ==='
-            for n in $(seq 1 13); do
-              bash .github/scripts/sequence-stage-check.sh "$n"; rc=$?; echo "STAGE_${n}_EXIT=$rc"; ((rc==0)) || FAIL=1
-            done
-            echo '=== WORKFLOW BYPASS POLICY ==='
+            for n in $(seq 1 13); do bash .github/scripts/sequence-stage-check.sh "$n"; rc=$?; echo "STAGE_${n}_EXIT=$rc"; ((rc==0)) || FAIL=1; done
             if grep -RInE --include='*.yml' --include='*.yaml' 'continue-on-error:[[:space:]]*true' .github/workflows; then FAIL=1; else echo 'NO_CONTINUE_ON_ERROR=true'; fi
             echo "STATIC_AUDIT_EXIT=$FAIL"
           } > forensic/static-audit.txt 2>&1
           cat forensic/static-audit.txt
           grep -Fq 'STATIC_AUDIT_EXIT=0' forensic/static-audit.txt
-
       - name: Canonical production build
         shell: bash
         run: |
@@ -103,7 +98,6 @@ jobs:
           grep -Fq 'APK_PRESENT=0' forensic/build.txt
           grep -Fq 'REPORT_PRESENT=0' forensic/build.txt
           cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
-
       - name: Fresh Android 35 emulator
         shell: bash
         run: |
@@ -129,7 +123,6 @@ jobs:
           done
           [[ "$(adb -s emulator-5554 get-state 2>/dev/null)" == device ]]
           [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]
-
       - name: Full production E2E
         shell: bash
         run: |
@@ -139,7 +132,6 @@ jobs:
           echo "E2E_EXIT=$rc" >> forensic/e2e-console.txt
           cat forensic/e2e-console.txt
           exit "$rc"
-
       - name: Final production user flow
         shell: bash
         run: |
@@ -149,7 +141,6 @@ jobs:
           echo "FINAL_FLOW_EXIT=$rc" >> forensic/final-flow-console.txt
           cat forensic/final-flow-console.txt
           exit "$rc"
-
       - name: Deterministic defect report
         if: always()
         shell: bash
@@ -159,11 +150,7 @@ jobs:
             echo '# FORENSIC V2 REPORT'
             echo "COMMIT=$(git rev-parse HEAD)"
             echo "UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-            echo
-            echo '## Boundary results'
             grep -E 'EXIT=|PRESENT=|STATIC_AUDIT_EXIT=' forensic/*.txt 2>/dev/null || true
-            echo
-            echo '## Final flow evidence'
             if [[ -s final-user-flow-evidence/PASS.txt ]]; then
               echo 'FINAL_FLOW=PASS'
               cat final-user-flow-evidence/PASS.txt
@@ -174,15 +161,10 @@ jobs:
             else
               echo 'FINAL_FLOW=UNVERIFIED'
             fi
-            echo
-            echo '## Crash/ANR evidence'
             if grep -Eiq 'FATAL EXCEPTION|ANR in|Application Not Responding|DeadSystemException|Fatal signal' forensic/*.txt final-user-flow-evidence/*.log 2>/dev/null; then echo 'CRASH_OR_ANR=FOUND'; else echo 'CRASH_OR_ANR=NONE_IN_CAPTURED_EVIDENCE'; fi
-            echo
-            echo '## Exact evidence files'
             find forensic final-user-flow-evidence -maxdepth 1 -type f -printf '%p\n' 2>/dev/null | sort
           } > forensic/FORENSIC_REPORT.md
           cat forensic/FORENSIC_REPORT.md
-
       - name: Upload exact evidence bundle
         if: always()
         uses: actions/upload-artifact@v4
