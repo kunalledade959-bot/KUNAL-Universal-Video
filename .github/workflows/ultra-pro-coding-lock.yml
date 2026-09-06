@@ -3,6 +3,8 @@ name: Ultra Pro Coding Lock
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -66,8 +68,8 @@ jobs:
           bash .github/scripts/sequence-stage-check.sh
           grep -RIn 'UniversalAccessibilityService' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
           grep -RIn 'StageGate' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
-          grep -RIn 'MediaProjection' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
-          grep -RIn 'TextToSpeech' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+          grep -RIn 'MediaProjection' . --exclude-dir=.git --exclude-dir=.gradle >/dev/null
+          grep -RIn 'TextToSpeech' . --exclude-dir=.git --exclude-dir=.gradle >/dev/null
 
       - name: Authoritative production build + full emulator E2E
         shell: bash
