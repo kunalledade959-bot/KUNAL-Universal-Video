@@ -141,6 +141,10 @@ jobs:
           echo "FINAL_FLOW_EXIT=$rc" >> forensic/final-flow-console.txt
           cat forensic/final-flow-console.txt
           exit "$rc"
+      - name: Exact failure packet
+        if: always()
+        shell: bash
+        run: bash .github/scripts/forensic-failure-pack.sh
       - name: Deterministic defect report
         if: always()
         shell: bash
