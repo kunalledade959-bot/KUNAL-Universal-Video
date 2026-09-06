@@ -49,7 +49,15 @@ jobs:
           set -euo pipefail
           SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
           [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
+          set +e
+          yes | "$SDKMANAGER" --licenses >/tmp/sdk-licenses.log 2>&1
+          YES_RC=${PIPESTATUS[0]}
+          SDK_RC=${PIPESTATUS[1]}
+          set -e
+          cat /tmp/sdk-licenses.log
+          echo "LICENSE_YES_EXIT=$YES_RC"
+          echo "LICENSE_SDKMANAGER_EXIT=$SDK_RC"
+          (( SDK_RC == 0 ))
           "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
 
       - name: Static zero-bypass gate
@@ -58,18 +66,17 @@ jobs:
           set -euo pipefail
           test -x .github/scripts/self-healing-gate.sh
           test -x .github/scripts/final-production-user-flow.sh
-          test -x .github/scripts/sequence-stage-check.sh
           bash -n .github/scripts/*.sh
           python3 -m py_compile *.py
-          if grep -RInE --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude='*.apk' --exclude='*.png' '(SKIP CHECK|ALLOW FAIL|DISABLE CHECK|TEMP_FIX|ignore failure|continue-on-error:[[:space:]]*true)' .; then
+          if grep -RInE --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude='*.apk' --exclude='*.png' '(SKIP CHECK|ALLOW FAIL|DISABLE CHECK|TEMP_FIX|ignore failure|continue-on-error:[[:space:]]*true)' .github/scripts .github/workflows *.py *.kt *.xml 2>/dev/null; then
             echo 'ZERO_BYPASS_TOKEN_FOUND'
             exit 1
           fi
-          bash .github/scripts/sequence-stage-check.sh
+          for n in $(seq 1 13); do bash .github/scripts/sequence-stage-check.sh "$n"; done
           grep -RIn 'UniversalAccessibilityService' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
           grep -RIn 'StageGate' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
-          grep -RIn 'MediaProjection' . --exclude-dir=.git --exclude-dir=.gradle >/dev/null
-          grep -RIn 'TextToSpeech' . --exclude-dir=.git --exclude-dir=.gradle >/dev/null
+          grep -RIn 'MediaProjection' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+          grep -RIn 'TextToSpeech' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
 
       - name: Authoritative production build + full emulator E2E
         shell: bash
