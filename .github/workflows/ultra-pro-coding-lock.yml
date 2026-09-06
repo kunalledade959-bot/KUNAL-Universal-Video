@@ -51,13 +51,12 @@ jobs:
           [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
           set +e
           yes | "$SDKMANAGER" --licenses >/tmp/sdk-licenses.log 2>&1
-          YES_RC=${PIPESTATUS[0]}
-          SDK_RC=${PIPESTATUS[1]}
+          PS=(${PIPESTATUS[@]})
           set -e
           cat /tmp/sdk-licenses.log
-          echo "LICENSE_YES_EXIT=$YES_RC"
-          echo "LICENSE_SDKMANAGER_EXIT=$SDK_RC"
-          (( SDK_RC == 0 ))
+          echo "LICENSE_YES_EXIT=${PS[0]}"
+          echo "LICENSE_SDKMANAGER_EXIT=${PS[1]}"
+          (( PS[1] == 0 ))
           "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
 
       - name: Static zero-bypass gate
