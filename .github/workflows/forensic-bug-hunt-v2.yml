@@ -1,0 +1,196 @@
+name: Forensic Bug Hunt V2
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/forensic-bug-hunt-v2.yml'
+      - '.github/scripts/**'
+      - '*.py'
+      - '*.kt'
+      - '*.xml'
+      - '*.gradle*'
+      - 'settings.gradle*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kunal-forensic-v2
+  cancel-in-progress: false
+
+jobs:
+  forensic:
+    name: Forensic V2 Evidence Gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    steps:
+      - name: Checkout exact HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Java 17 + Gradle 8.10.2
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
+
+      - name: Install exact Android test surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
+          "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
+
+      - name: Static audit with real stage contract arguments
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p forensic
+          FAIL=0
+          {
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo '=== SHELL SYNTAX ==='
+            for f in .github/scripts/*.sh *.sh; do [[ -f "$f" ]] || continue; bash -n "$f"; rc=$?; echo "SHELL $rc $f"; ((rc==0)) || FAIL=1; done
+            echo '=== PYTHON SYNTAX ==='
+            for f in *.py; do [[ -f "$f" ]] || continue; python3 -m py_compile "$f"; rc=$?; echo "PYTHON $rc $f"; ((rc==0)) || FAIL=1; done
+            echo '=== REQUIRED PRODUCTION SYMBOLS ==='
+            for p in UniversalAccessibilityService StageGate TARGET MediaProjection TextToSpeech queryIntentActivities getLaunchIntentForPackage; do
+              grep -RIn --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude-dir=forensic "$p" . >/tmp/hits 2>&1 || { echo "MISSING $p"; FAIL=1; continue; }
+              echo "PRESENT $p"; head -n 5 /tmp/hits
+            done
+            echo '=== 13-STAGE CONTRACTS ==='
+            for n in $(seq 1 13); do
+              bash .github/scripts/sequence-stage-check.sh "$n"; rc=$?; echo "STAGE_${n}_EXIT=$rc"; ((rc==0)) || FAIL=1
+            done
+            echo '=== WORKFLOW BYPASS POLICY ==='
+            if grep -RInE --include='*.yml' --include='*.yaml' 'continue-on-error:[[:space:]]*true' .github/workflows; then FAIL=1; else echo 'NO_CONTINUE_ON_ERROR=true'; fi
+            echo "STATIC_AUDIT_EXIT=$FAIL"
+          } > forensic/static-audit.txt 2>&1
+          cat forensic/static-audit.txt
+          grep -Fq 'STATIC_AUDIT_EXIT=0' forensic/static-audit.txt
+
+      - name: Canonical production build
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p forensic artifact
+          {
+            python3 preflight_patch.py; echo "PREFLIGHT_EXIT=$?"
+            python3 constructor_lifecycle_patch.py; echo "CONSTRUCTOR_EXIT=$?"
+            python3 stage11_hardening_v2.py; echo "STAGE11_EXIT=$?"
+            python3 pro_repair_v4.py; echo "BUILDER_EXIT=$?"
+            ls -lh KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+            test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk; echo "APK_PRESENT=$?"
+            test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json; echo "REPORT_PRESENT=$?"
+          } > forensic/build.txt 2>&1
+          cat forensic/build.txt
+          grep -Fq 'BUILDER_EXIT=0' forensic/build.txt
+          grep -Fq 'APK_PRESENT=0' forensic/build.txt
+          grep -Fq 'REPORT_PRESENT=0' forensic/build.txt
+          cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+
+      - name: Fresh Android 35 emulator
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          mkdir -p "$ANDROID_AVD_HOME"
+          adb kill-server || true
+          adb start-server
+          rm -rf "$ANDROID_AVD_HOME/forensic.avd" "$ANDROID_AVD_HOME/forensic.ini"
+          printf 'no\n' | avdmanager create avd --force -n forensic --package 'system-images;android-35;default;x86_64' --device 'pixel_2' > forensic/avd-create.log 2>&1
+          printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/forensic.avd/config.ini"
+          [[ -e /dev/kvm ]] && sudo chmod 666 /dev/kvm || true
+          emulator -avd forensic -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > forensic/emulator.log 2>&1 &
+          EMU_PID=$!
+          deadline=$((SECONDS+900))
+          while ((SECONDS<deadline)); do
+            kill -0 "$EMU_PID" 2>/dev/null || break
+            if [[ "$(adb -s emulator-5554 get-state 2>/dev/null || true)" == device ]] && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)" == 1 ]]; then break; fi
+            sleep 3
+          done
+          [[ "$(adb -s emulator-5554 get-state 2>/dev/null)" == device ]]
+          [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]
+
+      - name: Full production E2E
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash .github/scripts/self-healing-gate.sh > forensic/e2e-console.txt 2>&1
+          rc=$?
+          echo "E2E_EXIT=$rc" >> forensic/e2e-console.txt
+          cat forensic/e2e-console.txt
+          exit "$rc"
+
+      - name: Final production user flow
+        shell: bash
+        run: |
+          set -uo pipefail
+          bash .github/scripts/final-production-user-flow.sh > forensic/final-flow-console.txt 2>&1
+          rc=$?
+          echo "FINAL_FLOW_EXIT=$rc" >> forensic/final-flow-console.txt
+          cat forensic/final-flow-console.txt
+          exit "$rc"
+
+      - name: Deterministic defect report
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '# FORENSIC V2 REPORT'
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo
+            echo '## Boundary results'
+            grep -E 'EXIT=|PRESENT=|STATIC_AUDIT_EXIT=' forensic/*.txt 2>/dev/null || true
+            echo
+            echo '## Final flow evidence'
+            if [[ -s final-user-flow-evidence/PASS.txt ]]; then
+              echo 'FINAL_FLOW=PASS'
+              cat final-user-flow-evidence/PASS.txt
+            elif [[ -s final-user-flow-evidence/FAIL.txt ]]; then
+              echo 'FINAL_FLOW=FAIL'
+              cat final-user-flow-evidence/FAIL.txt
+              cat final-user-flow-evidence/root-cause-classification.txt 2>/dev/null || true
+            else
+              echo 'FINAL_FLOW=UNVERIFIED'
+            fi
+            echo
+            echo '## Crash/ANR evidence'
+            if grep -Eiq 'FATAL EXCEPTION|ANR in|Application Not Responding|DeadSystemException|Fatal signal' forensic/*.txt final-user-flow-evidence/*.log 2>/dev/null; then echo 'CRASH_OR_ANR=FOUND'; else echo 'CRASH_OR_ANR=NONE_IN_CAPTURED_EVIDENCE'; fi
+            echo
+            echo '## Exact evidence files'
+            find forensic final-user-flow-evidence -maxdepth 1 -type f -printf '%p\n' 2>/dev/null | sort
+          } > forensic/FORENSIC_REPORT.md
+          cat forensic/FORENSIC_REPORT.md
+
+      - name: Upload exact evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-FORENSIC-V2-${{ github.run_id }}
+          path: |
+            forensic/
+            final-user-flow-evidence/
+            artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          if-no-files-found: warn
+          retention-days: 30
