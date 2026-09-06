@@ -1,0 +1,305 @@
+name: Forensic Bug Hunt
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/forensic-bug-hunt.yml'
+      - '.github/scripts/**'
+      - '*.py'
+      - '*.kt'
+      - '*.xml'
+      - '*.gradle'
+      - 'gradle/**'
+      - 'settings.gradle*'
+      - 'AndroidManifest.xml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kunal-universal-video-forensic-bug-hunt
+  cancel-in-progress: false
+
+jobs:
+  forensic:
+    name: Full forensic diagnosis with evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - name: Checkout exact HEAD
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
+
+      - name: Install exact Android components
+        shell: bash
+        run: |
+          set +e
+          mkdir -p forensic evidence artifact
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          {
+            echo '=== sdkmanager ==='
+            "$SDKMANAGER" --version
+            echo '=== licenses ==='
+            yes | "$SDKMANAGER" --licenses >/dev/null 2>&1
+            echo "LICENSE_EXIT=$?"
+            echo '=== install ==='
+            "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
+            echo "SDK_INSTALL_EXIT=$?"
+          } > forensic/sdk.log 2>&1
+
+      - name: Deep static audit, syntax and contract checks
+        shell: bash
+        run: |
+          set +e
+          mkdir -p forensic
+          FAIL=0
+          {
+            echo '=== REPOSITORY ==='
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "BRANCH=$(git branch --show-current)"
+            git status --short
+            echo
+            echo '=== ALL TRACKED FILES ==='
+            git ls-files | sort
+            echo
+            echo '=== SHELL SYNTAX ==='
+            for f in .github/scripts/*.sh *.sh; do
+              [[ -f "$f" ]] || continue
+              bash -n "$f"; rc=$?; echo "SHELL_SYNTAX $rc $f"; (( rc==0 )) || FAIL=1
+            done
+            echo
+            echo '=== PYTHON SYNTAX ==='
+            for f in *.py; do
+              [[ -f "$f" ]] || continue
+              python3 -m py_compile "$f"; rc=$?; echo "PYTHON_SYNTAX $rc $f"; (( rc==0 )) || FAIL=1
+            done
+            echo
+            echo '=== FORBIDDEN TEST WEAKENING / BYPASS TOKENS ==='
+            if grep -RInE --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude='*.apk' --exclude='*.png' '(SKIP CHECK|ALLOW FAIL|DISABLE CHECK|TEMP_FIX|TODO|FIXME|HACK|fake pass|fake PASS|ignore failure|continue-on-error:[[:space:]]*true)' .; then
+              echo 'STATIC_SUSPICIOUS_TOKENS=FOUND'
+              FAIL=1
+            else
+              echo 'STATIC_SUSPICIOUS_TOKENS=NONE'
+            fi
+            echo
+            echo '=== REQUIRED PRODUCTION SYMBOLS ==='
+            for p in 'UniversalAccessibilityService' 'StageGate' 'TARGET' 'MediaProjection' 'TextToSpeech' 'assemble' 'queryIntentActivities' 'getLaunchIntentForPackage'; do
+              if grep -RIn --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle "$p" . >/tmp/hits 2>&1; then
+                echo "REQUIRED_SYMBOL $p PASS"
+                head -n 12 /tmp/hits
+              else
+                echo "REQUIRED_SYMBOL $p FAIL"
+                FAIL=1
+              fi
+            done
+            echo
+            echo '=== STAGE CONTRACT CHECK ==='
+            if [[ -x .github/scripts/sequence-stage-check.sh ]]; then
+              bash .github/scripts/sequence-stage-check.sh; rc=$?; echo "SEQUENCE_STAGE_CHECK_EXIT=$rc"; (( rc==0 )) || FAIL=1
+            else
+              echo 'SEQUENCE_STAGE_CHECK_MISSING'; FAIL=1
+            fi
+            echo
+            echo "STATIC_AUDIT_EXIT=$FAIL"
+          } > forensic/static-audit.txt 2>&1
+          cat forensic/static-audit.txt
+          exit 0
+
+      - name: Reproduce production APK and preserve build failure evidence
+        shell: bash
+        run: |
+          set +e
+          FAIL=0
+          {
+            echo '=== PRE-BUILD ==='
+            python3 preflight_patch.py; echo "preflight_exit=$?"
+            python3 constructor_lifecycle_patch.py; echo "constructor_exit=$?"
+            python3 stage11_hardening_v2.py; echo "stage11_exit=$?"
+            echo '=== CANONICAL ACTIVITY CONTRACT ==='
+            grep -nE 'queryIntentActivities|CATEGORY_LAUNCHER|getLaunchIntentForPackage|mainHandler|getInstalledApplications' activity_fixed.kt
+            echo "activity_contract_exit=$?"
+            echo '=== PRODUCTION BUILDER ==='
+            python3 pro_repair_v4.py; rc=$?; echo "builder_exit=$rc"; (( rc==0 )) || FAIL=1
+            echo '=== OUTPUTS ==='
+            ls -lh KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json; rc=$?; echo "output_check_exit=$rc"; (( rc==0 )) || FAIL=1
+            if [[ -s KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk ]]; then cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk; echo 'APK_ARTIFACT=PASS'; else echo 'APK_ARTIFACT=FAIL'; FAIL=1; fi
+            echo "BUILD_FORENSIC_EXIT=$FAIL"
+          } > forensic/build.txt 2>&1
+          cat forensic/build.txt
+          exit 0
+
+      - name: Create fresh Android 35 emulator
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+          mkdir -p "$ANDROID_AVD_HOME"
+          adb kill-server || true
+          adb start-server
+          rm -rf "$ANDROID_AVD_HOME/forensic.avd" "$ANDROID_AVD_HOME/forensic.ini"
+          printf 'no\n' | avdmanager create avd --force -n forensic --package 'system-images;android-35;default;x86_64' --device 'pixel_2' > forensic/avd-create.log 2>&1
+          echo 'hw.cpu.ncore=2' >> "$ANDROID_AVD_HOME/forensic.avd/config.ini"
+          echo 'hw.ramSize=2048' >> "$ANDROID_AVD_HOME/forensic.avd/config.ini"
+          if [[ -e /dev/kvm ]]; then sudo chmod 666 /dev/kvm || true; fi
+          ls -l /dev/kvm > forensic/kvm.txt 2>&1 || true
+          emulator -avd forensic -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > forensic/emulator.log 2>&1 &
+          echo $! > forensic/emulator.pid
+          deadline=$((SECONDS+900))
+          while (( SECONDS < deadline )); do
+            if ! kill -0 "$(cat forensic/emulator.pid)" 2>/dev/null; then break; fi
+            if adb -s emulator-5554 get-state 2>/dev/null | grep -q '^device$' && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == '1' ]]; then break; fi
+            sleep 3
+          done
+          adb -s emulator-5554 get-state > forensic/emulator-state.txt 2>&1
+          adb -s emulator-5554 shell getprop ro.build.version.sdk >> forensic/emulator-state.txt 2>&1
+          adb -s emulator-5554 shell getprop sys.boot_completed >> forensic/emulator-state.txt 2>&1
+
+      - name: Run clean runtime boundary diagnosis
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -s artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk ]]; then
+            bash root-cause-diagnostic-emulator.sh; echo "RUNTIME_BOUNDARY_EXIT=$?" > forensic/runtime-boundary-exit.txt
+          else
+            echo 'RUNTIME_BOUNDARY_SKIPPED=APK_MISSING' > forensic/runtime-boundary-exit.txt
+          fi
+          cat forensic/runtime-boundary-exit.txt
+          cat diagnostic/boundary-results.txt > forensic/boundary-results.txt 2>/dev/null || true
+          cp diagnostic/relevant-logcat.txt forensic/relevant-logcat.txt 2>/dev/null || true
+          cp diagnostic/full-logcat.txt forensic/full-logcat.txt 2>/dev/null || true
+          cp diagnostic/ui-hierarchy.xml forensic/ui-hierarchy.xml 2>/dev/null || true
+          cp diagnostic/package.txt forensic/package.txt 2>/dev/null || true
+          cp diagnostic/activity-focus.txt forensic/activity-focus.txt 2>/dev/null || true
+          cp diagnostic/window-focus.txt forensic/window-focus.txt 2>/dev/null || true
+
+      - name: Run full production user flow and preserve exact failure evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [[ -s artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk ]]; then
+            bash .github/scripts/final-production-user-flow.sh > forensic/final-flow-console.txt 2>&1
+            echo "FINAL_FLOW_EXIT=$?" >> forensic/final-flow-console.txt
+            cp final-user-flow-evidence/final-user-flow.log forensic/final-user-flow.log 2>/dev/null || true
+            cp final-user-flow-evidence/FAIL.txt forensic/FAIL.txt 2>/dev/null || true
+            cp final-user-flow-evidence/PASS.txt forensic/PASS.txt 2>/dev/null || true
+            cp final-user-flow-evidence/root-cause-classification.txt forensic/final-root-cause-classification.txt 2>/dev/null || true
+            cp final-user-flow-evidence/prefs.txt forensic/prefs.txt 2>/dev/null || true
+            cp final-user-flow-evidence/ui-after-save.xml forensic/ui-after-save.xml 2>/dev/null || true
+            cp final-user-flow-evidence/accessibility-post-stage2-dumpsys.txt forensic/accessibility-post-stage2-dumpsys.txt 2>/dev/null || true
+            cp final-user-flow-evidence/target-foreground.txt forensic/target-foreground.txt 2>/dev/null || true
+          else
+            echo 'FINAL_FLOW_SKIPPED=APK_MISSING' > forensic/final-flow-console.txt
+          fi
+
+      - name: Build deterministic forensic report from observed evidence
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p forensic
+          {
+            echo '# KUNAL UNIVERSAL VIDEO - FORENSIC BUG HUNT'
+            echo
+            echo "COMMIT=$(git rev-parse HEAD)"
+            echo "UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo
+            echo '## IMPORTANT'
+            echo 'This report never converts an observed failure into PASS. Every FAIL below must point to captured evidence.'
+            echo
+            echo '## 1. Static audit'
+            grep -E 'FAIL|FOUND|EXIT=' forensic/static-audit.txt 2>/dev/null || echo 'No static failure markers captured.'
+            echo
+            echo '## 2. Build boundary'
+            grep -E 'exit=|EXIT=|APK_ARTIFACT|ERROR|Exception|FAILED' forensic/build.txt 2>/dev/null || echo 'No build markers captured.'
+            echo
+            echo '## 3. Runtime boundary'
+            cat forensic/boundary-results.txt 2>/dev/null || echo 'BOUNDARY_RESULTS_UNAVAILABLE'
+            echo
+            echo '## 4. Production user flow'
+            cat forensic/final-root-cause-classification.txt 2>/dev/null || true
+            cat forensic/FAIL.txt 2>/dev/null || true
+            cat forensic/PASS.txt 2>/dev/null || true
+            echo
+            echo '## 5. Crash / ANR evidence'
+            if grep -Eiq 'FATAL EXCEPTION|ANR in|Application Not Responding|DeadSystemException|Fatal signal|has died' forensic/full-logcat.txt forensic/final-user-flow.log 2>/dev/null; then
+              echo 'CRASH_OR_ANR_EVIDENCE=FOUND'
+              grep -Ein 'FATAL EXCEPTION|ANR in|Application Not Responding|DeadSystemException|Fatal signal|has died' forensic/full-logcat.txt forensic/final-user-flow.log 2>/dev/null | head -n 120
+            else
+              echo 'CRASH_OR_ANR_EVIDENCE=NONE_IN_CAPTURED_LOGS'
+            fi
+            echo
+            echo '## 6. Accessibility evidence'
+            grep -E 'EXPECTED_SERVICE|ACTUAL_SERVICES|STAGE2_ACCESSIBILITY_STATE|Bound services|Enabled services|UniversalAccessibilityService' forensic/accessibility-post-stage2-dumpsys.txt forensic/final-user-flow.log 2>/dev/null | head -n 160 || true
+            echo
+            echo '## 7. Target persistence evidence'
+            cat forensic/prefs.txt 2>/dev/null || echo 'PREFS_EVIDENCE_UNAVAILABLE'
+            echo
+            echo '## 8. Exact evidence files'
+            find forensic -maxdepth 1 -type f -printf '%f\n' | sort
+            echo
+            echo '## FIRST PROVEN FAILURE'
+            if grep -Eq 'FINAL_USER_FLOW_FAIL:' forensic/FAIL.txt 2>/dev/null; then
+              echo "$(head -n 1 forensic/FAIL.txt)"
+            elif grep -Eq 'BUILD_FORENSIC_EXIT=1|APK_ARTIFACT=FAIL' forensic/build.txt 2>/dev/null; then
+              echo 'BUILD_BOUNDARY_FAILURE'
+            elif grep -Eq 'RUNTIME_BOUNDARY_EXIT=1' forensic/runtime-boundary-exit.txt 2>/dev/null; then
+              echo 'RUNTIME_BOUNDARY_FAILURE'
+            elif grep -Eq 'STATIC_AUDIT_EXIT=1' forensic/static-audit.txt 2>/dev/null; then
+              echo 'STATIC_AUDIT_FAILURE'
+            else
+              echo 'NO_PROVEN_FAILURE_IN_CHECKED_BOUNDARIES'
+            fi
+          } > forensic/FORENSIC_REPORT.md
+          cat forensic/FORENSIC_REPORT.md
+
+      - name: Upload complete evidence bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: KUNAL-FORENSIC-BUG-HUNT-${{ github.run_id }}
+          path: |
+            forensic/
+            diagnostic/
+            final-user-flow-evidence/
+            artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Fail run if any proven defect exists
+        if: always()
+        shell: bash
+        run: |
+          set -e
+          if grep -Eq 'STATIC_AUDIT_EXIT=1|BUILD_FORENSIC_EXIT=1|RUNTIME_BOUNDARY_EXIT=1|FINAL_USER_FLOW_FAIL:' forensic/FORENSIC_REPORT.md; then
+            echo 'FORENSIC_RESULT=FAIL'
+            exit 1
+          fi
+          echo 'FORENSIC_RESULT=NO_PROVEN_FAILURE_IN_CHECKED_BOUNDARIES'
