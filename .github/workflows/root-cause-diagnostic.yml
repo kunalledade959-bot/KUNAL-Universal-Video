@@ -70,6 +70,14 @@ jobs:
           grep -Fq 'build-tools;35.0.0' diagnostic/sdk-installed.txt
           grep -Fq 'emulator' diagnostic/sdk-installed.txt
 
+      - name: Deterministic production quality firewall
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/production-quality-audit.sh
+          bash -n .github/scripts/*.sh
+          python3 -m py_compile *.py
+
       - name: Capture repository and toolchain state
         shell: bash
         run: |
@@ -177,6 +185,14 @@ jobs:
             cat diagnostic/boundary-results.txt 2>/dev/null || echo "BOUNDARY_RESULTS=UNAVAILABLE"
             echo "SYSTEM_ERROR_EVIDENCE=$SYSTEM_EVIDENCE"
             test -s diagnostic/ui-hierarchy.xml && echo "UI_HIERARCHY_CAPTURED=1" || echo "UI_HIERARCHY_CAPTURED=0"
+            echo
+            echo "## Repair intelligence"
+            if test -s diagnostic/relevant-logcat.txt; then
+              bash .github/scripts/failure-intelligence.sh diagnostic/relevant-logcat.txt || true
+            else
+              echo "FAILURE_INTELLIGENCE=NO_RELEVANT_LOG_AVAILABLE"
+              echo "CERTIFICATION=UNVERIFIED"
+            fi
             echo
             echo "## Repair contract"
             echo "Repair only the first failing boundary. Use the exact observed failure lines above as the evidence contract."
