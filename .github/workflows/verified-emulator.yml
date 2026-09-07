@@ -26,7 +26,12 @@ jobs:
       - name: Install Android SDK components
         shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null || true
+          set -euo pipefail
+          set +e
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          PS=(${PIPESTATUS[@]})
+          set -e
+          (( PS[1] == 0 ))
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator"
       - name: Apply deterministic preflight patch
         run: python3 preflight_patch.py
@@ -57,8 +62,6 @@ jobs:
           name: KUNAL-Universal-Video-APK
           path: artifact
       - name: Android emulator smoke test
-        id: smoke
-        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
