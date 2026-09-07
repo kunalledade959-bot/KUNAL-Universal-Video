@@ -244,7 +244,21 @@ class MainActivity : androidx.activity.ComponentActivity() {
         i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         UniversalAccessibilityService.targetPackage = target
         startActivity(i)
-        pass(6, "Target launched and Accessibility operation channel armed")
+        pass(6, "Target launch requested; waiting for Accessibility foreground proof")
+        waitForTargetForeground(0)
+    }
+
+    private fun waitForTargetForeground(attempt: Int) {
+        if (gate.state(7) != StageGate.State.READY) return
+        if (UniversalAccessibilityService.targetForeground) {
+            deepStudy()
+            return
+        }
+        if (attempt >= 20) {
+            fail(7, "Target did not become foreground in Accessibility service within 10 seconds")
+            return
+        }
+        mainHandler.postDelayed({ waitForTargetForeground(attempt + 1) }, 500L)
     }
 
     private fun deepStudy() {
