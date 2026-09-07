@@ -88,13 +88,14 @@ jobs:
           done
           for n in $(seq 1 13); do
             echo "STATIC_STAGE_CONTRACT_CHECK_START=$n"
-            if ! bash .github/scripts/sequence-stage-check.sh "$n"; then
+            if bash .github/scripts/sequence-stage-check.sh "$n"; then
+              echo "STATIC_STAGE_CONTRACT_CHECK_PASS=$n"
+            else
               rc=$?
               echo "STATIC_STAGE_CONTRACT_CHECK_FAIL=$n"
               echo "STATIC_STAGE_CONTRACT_CHECK_EXIT=$rc"
               exit "$rc"
             fi
-            echo "STATIC_STAGE_CONTRACT_CHECK_PASS=$n"
           done
           require_repo_token() {
             local token="$1"
