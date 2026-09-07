@@ -26,7 +26,6 @@ permissions:
   contents: write
   actions: write
   actions: read
-  copilot-requests: write
 
 jobs:
   harden:
@@ -56,17 +55,26 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: true
 
       - name: Install Android SDK deterministically
         shell: bash
         run: |
           set -euo pipefail
-          set +o pipefail
-          yes | sdkmanager --licenses >/dev/null 2>&1
-          LICENSE_STATUS=${PIPESTATUS[1]}
-          set -o pipefail
-          test "$LICENSE_STATUS" = 0
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
+          SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          [[ -x "$SDKMANAGER" ]] || SDKMANAGER="${ANDROID_HOME:-/usr/local/lib/android/sdk}/cmdline-tools/16.0/bin/sdkmanager"
+          set +e
+          yes | "$SDKMANAGER" --licenses >/tmp/night-shift-sdk-licenses.log 2>&1
+          PS=(${PIPESTATUS[@]})
+          set -e
+          cat /tmp/night-shift-sdk-licenses.log
+          echo "LICENSE_YES_EXIT=${PS[0]}"
+          echo "LICENSE_SDKMANAGER_EXIT=${PS[1]}"
+          (( PS[1] == 0 ))
+          "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
 
       - name: Install production repair agent
         shell: bash
@@ -93,6 +101,7 @@ jobs:
           grep -RInE 'TODO|FIXME|HACK|TEMPORARY|TEMP_FIX|DISABLE.*CHECK|SKIP.*CHECK|ALLOW.*FAIL' \
             --exclude-dir=.git --exclude-dir=.gradle --exclude-dir=build --exclude-dir=artifact . \
             > night-shift-evidence/audit/suspicious-markers.txt || true
+          bash .github/scripts/production-quality-audit.sh
           bash -n .github/scripts/*.sh
           python3 -m py_compile *.py 2>night-shift-evidence/audit/python-syntax-errors.txt || {
             cat night-shift-evidence/audit/python-syntax-errors.txt
