@@ -134,7 +134,7 @@ jobs:
 
             rm -f e2e-PASS.txt
             set +e
-            bash .github/scripts/self-healing-gate.sh > "$dir/self-healing-gate.log" 2>&1
+            KUNAL_KEEP_EMULATOR_AFTER_GATE=1 bash .github/scripts/self-healing-gate.sh > "$dir/self-healing-gate.log" 2>&1
             local gate=$?
             set -e
             echo "$gate" > "$dir/self-healing-gate-exit.txt"
@@ -153,6 +153,7 @@ jobs:
             set -e
             echo "$flow" > "$dir/final-flow-exit.txt"
             cp FINAL_PRODUCTION_USER_FLOW_*.txt "$dir/" 2>/dev/null || true
+            adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
             if [[ "$flow" != 0 ]]; then
               echo 'ROUND_FAIL_FINAL_PRODUCTION_USER_FLOW' > "$dir/result.txt"
               return 11
