@@ -196,7 +196,7 @@ jobs:
             echo
             echo "## Repair contract"
             echo "Repair only the first failing boundary. Use the exact observed failure lines above as the evidence contract."
-            echo "Do not weaken assertions, skip checks, manufacture PASS markers, or classify generic system_server log lines as a system failure."
+            echo "Do not weaken assertions, bypass checks, manufacture PASS markers, or classify generic system_server log lines as a system failure."
             echo "If no deterministic failure evidence exists, status is UNVERIFIED, not PASS."
           } > diagnostic/ROOT_CAUSE_REPORT.md
 
