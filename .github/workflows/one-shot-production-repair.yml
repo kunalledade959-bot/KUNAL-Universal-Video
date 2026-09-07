@@ -10,7 +10,6 @@ concurrency:
 permissions:
   contents: read
   actions: read
-  copilot-requests: write
 
 jobs:
   one-shot-repair:
@@ -39,12 +38,22 @@ jobs:
         uses: android-actions/setup-android@v3
 
       - name: Install required Android SDK components
+        shell: bash
         run: |
-          yes | sdkmanager --licenses >/dev/null 2>&1 || true
+          set -euo pipefail
+          set +e
+          yes | sdkmanager --licenses >/dev/null 2>&1
+          PS=(${PIPESTATUS[@]})
+          set -e
+          (( PS[1] == 0 ))
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
 
       - name: Install Copilot CLI
-        run: npm install -g @github/copilot
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install -g @github/copilot
+          copilot --version
 
       - name: Run one-shot production repair cell
         env:
