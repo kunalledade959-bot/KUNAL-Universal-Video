@@ -19,6 +19,8 @@ jobs:
     name: Ultra Pro Coding Lock
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    env:
+      KUNAL_KEEP_EMULATOR_AFTER_GATE: '1'
     steps:
       - name: Checkout exact change
         uses: actions/checkout@v4
@@ -108,12 +110,20 @@ jobs:
           grep -Fq 'TARGET_PERSISTENCE=PASS' final-user-flow-evidence/PASS.txt
           grep -Fq 'TARGET_FOREGROUND=PASS' final-user-flow-evidence/PASS.txt
 
+      - name: Dispose chained production emulator
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          adb -s emulator-5554 emu kill >/dev/null 2>&1
+          exit 0
+
       - name: Final evidence integrity gate
         shell: bash
         run: |
           set -euo pipefail
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
-          grep -Fq '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -Fq '\"status\": \"STATIC_AND_BUILD_VERIFIED\"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           test -s final-user-flow-evidence/final-user-flow.log
           test -s final-user-flow-evidence/ui-after-stage2.xml
           test -s final-user-flow-evidence/ui-after-save.xml
