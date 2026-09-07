@@ -55,7 +55,7 @@ mkdir -p forensic
 done
   echo
   echo '## REPAIR RULE'
-  echo 'Repair only the first failing boundary shown above. Do not change later stages, weaken assertions, skip checks, or convert UNVERIFIED/INFRA FAILURE into PASS.'
+  echo 'Repair only the first failing boundary shown above. Do not change later stages, weaken assertions, bypass checks, or convert UNVERIFIED/INFRA FAILURE into PASS.'
   echo 'The exact observed error and evidence fingerprint are the contract for the next repair.'
 } > "$OUT"
 cat "$OUT"
