@@ -14,7 +14,6 @@ concurrency:
 permissions:
   contents: write
   actions: read
-  copilot-requests: write
 
 jobs:
   autorepair:
@@ -45,17 +44,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # sdkmanager exits successfully after accepting all licenses, while the
-          # long-lived `yes` producer receives SIGPIPE. Do not let that expected
-          # producer-side SIGPIPE mask the real sdkmanager exit status.
-          set +o pipefail
+          set +e
           yes | sdkmanager --licenses >/dev/null 2>&1
-          LICENSE_STATUS=${PIPESTATUS[1]}
-          set -o pipefail
-          if [[ "$LICENSE_STATUS" != "0" ]]; then
-            echo "Android SDK license acceptance failed with sdkmanager exit code $LICENSE_STATUS" >&2
-            exit "$LICENSE_STATUS"
-          fi
+          PS=(${PIPESTATUS[@]})
+          set -e
+          (( PS[1] == 0 ))
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "emulator" "system-images;android-35;default;x86_64"
 
       - name: Install Copilot CLI
@@ -102,9 +95,6 @@ jobs:
 
           run_final_user_flow() {
             local out="$1"
-            if [[ ! -x .github/scripts/final-production-user-flow.sh ]]; then
-              chmod +x .github/scripts/final-production-user-flow.sh
-            fi
             set +e
             bash .github/scripts/final-production-user-flow.sh > "$out/final-production-user-flow.log" 2>&1
             local status=$?
@@ -130,19 +120,11 @@ jobs:
 
               if [[ "$STRATEGY" -gt 1 ]]; then
                 PREV="$ROOT_DIR/strategy-$((STRATEGY-1))"
-                if [[ -f "$PREV/gate-exit-code.txt" ]]; then
-                  cp "$PREV/gate-exit-code.txt" "$STRATEGY_DIR/previous-gate-exit-code.txt"
-                fi
-                if [[ -f "$PREV/self-healing-gate.log" ]]; then
-                  cp "$PREV/self-healing-gate.log" "$STRATEGY_DIR/previous-gate.log"
-                fi
-                if [[ -f "$PREV/strategy.md" ]]; then
-                  cp "$PREV/strategy.md" "$STRATEGY_DIR/previous-strategy.md"
-                fi
+                [[ -f "$PREV/gate-exit-code.txt" ]] && cp "$PREV/gate-exit-code.txt" "$STRATEGY_DIR/previous-gate-exit-code.txt"
+                [[ -f "$PREV/self-healing-gate.log" ]] && cp "$PREV/self-healing-gate.log" "$STRATEGY_DIR/previous-gate.log"
+                [[ -f "$PREV/strategy.md" ]] && cp "$PREV/strategy.md" "$STRATEGY_DIR/previous-strategy.md"
               fi
 
-              # Every alternative starts from the last known-good checkpoint. Failed experiments
-              # are never allowed to contaminate the next strategy.
               git reset --hard "$BASE_SHA" >/dev/null
               collect_state "$STRATEGY_DIR/pre-repair"
 
@@ -211,15 +193,11 @@ jobs:
 
               if ! run_authoritative_gate "$STRATEGY_DIR"; then
                 echo 'ROOT_NOT_CLOSED_BY_FULL_E2E' | tee "$STRATEGY_DIR/result.txt"
-                # Preserve the failure evidence, then revert the failed experiment before
-                # selecting an alternative mechanism for the same root cause.
                 git diff > "$STRATEGY_DIR/failed-repair.diff" || true
                 git reset --hard "$BASE_SHA" >/dev/null
                 continue
               fi
 
-              # Full E2E is necessary but not sufficient. The final production user flow must
-              # also prove the visible target-selection -> target-launch -> return-to-app path.
               if ! run_final_user_flow "$STRATEGY_DIR"; then
                 echo 'ROOT_NOT_CLOSED_BY_FINAL_USER_FLOW' | tee "$STRATEGY_DIR/result.txt"
                 git diff > "$STRATEGY_DIR/failed-final-flow-repair.diff" || true
@@ -231,8 +209,6 @@ jobs:
               git diff --check
               git status --short > "$STRATEGY_DIR/final-git-status.txt"
 
-              # Create a local checkpoint only after both authoritative gates pass. It is not
-              # pushed until the entire repair session has completed successfully.
               git add -A
               git commit -m "fix: close autorepair root cause $ROOT" >/dev/null
               ROOT_CLOSED=1
@@ -245,8 +221,6 @@ jobs:
               exit 1
             fi
 
-            # A full gate pass means the current product state is verified. Stop rather than
-            # inventing more work. Any new failure will create a new evidence-backed cycle.
             if [[ -f e2e-PASS.txt ]]; then
               echo "AUTOREPAIR_VERIFIED_PASS_AFTER_ROOT=$ROOT" | tee autorepair-evidence/VERIFIED_PASS.txt
               break
