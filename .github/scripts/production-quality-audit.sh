@@ -17,7 +17,8 @@ for f in \
   .github/scripts/self-healing-gate.sh \
   .github/scripts/full-e2e-emulator.sh \
   .github/scripts/final-production-user-flow.sh \
-  .github/scripts/failure-intelligence.sh; do
+  .github/scripts/failure-intelligence.sh \
+  .github/scripts/failure-intelligence-test.sh; do
   [[ -s "$f" ]] || fail "required file missing or empty: $f"
 done
 
@@ -59,6 +60,11 @@ fi
 # Failure intelligence must be present and explicitly fail closed.
 grep -Fq 'CERTIFICATION=FAIL_REQUIRES_VERIFICATION' .github/scripts/failure-intelligence.sh || fail 'failure intelligence fail-closed certification missing'
 grep -Fq 'UNKNOWN' .github/scripts/failure-intelligence.sh || fail 'unknown failure classification missing'
+
+# The classifier itself is executable as a deterministic contract test. This
+# checks the repair-routing vocabulary without requiring an emulator.
+bash .github/scripts/failure-intelligence-test.sh | tee quality-failure-intelligence-test.log
+grep -Fq 'FAILURE_INTELLIGENCE_TEST_PASS' quality-failure-intelligence-test.log || fail 'failure intelligence self-test did not PASS'
 
 # Important boundary: current final-user-flow is deliberately only a Stage 2→3
 # handoff proof. Never label it as full 13-stage certification in static code.
