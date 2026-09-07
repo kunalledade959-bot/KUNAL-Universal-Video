@@ -25,6 +25,8 @@ jobs:
     name: Forensic V2 Evidence Gate
     runs-on: ubuntu-24.04
     timeout-minutes: 350
+    env:
+      KUNAL_KEEP_EMULATOR_AFTER_GATE: '1'
     steps:
       - name: Checkout exact HEAD
         uses: actions/checkout@v4
@@ -98,32 +100,7 @@ jobs:
           grep -Fq 'APK_PRESENT=0' forensic/build.txt
           grep -Fq 'REPORT_PRESENT=0' forensic/build.txt
           cp KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk artifact/KUNAL_UNIVERSAL_VIDEO_PRO_V3.apk
-      - name: Fresh Android 35 emulator
-        shell: bash
-        run: |
-          set -euo pipefail
-          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          export ANDROID_SDK_ROOT="$ANDROID_HOME"
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
-          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
-          mkdir -p "$ANDROID_AVD_HOME"
-          adb kill-server || true
-          adb start-server
-          rm -rf "$ANDROID_AVD_HOME/forensic.avd" "$ANDROID_AVD_HOME/forensic.ini"
-          printf 'no\n' | avdmanager create avd --force -n forensic --package 'system-images;android-35;default;x86_64' --device 'pixel_2' > forensic/avd-create.log 2>&1
-          printf 'hw.cpu.ncore=2\nhw.ramSize=2048\n' >> "$ANDROID_AVD_HOME/forensic.avd/config.ini"
-          [[ -e /dev/kvm ]] && sudo chmod 666 /dev/kvm || true
-          emulator -avd forensic -port 5554 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect -accel on > forensic/emulator.log 2>&1 &
-          EMU_PID=$!
-          deadline=$((SECONDS+900))
-          while ((SECONDS<deadline)); do
-            kill -0 "$EMU_PID" 2>/dev/null || break
-            if [[ "$(adb -s emulator-5554 get-state 2>/dev/null || true)" == device ]] && [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)" == 1 ]]; then break; fi
-            sleep 3
-          done
-          [[ "$(adb -s emulator-5554 get-state 2>/dev/null)" == device ]]
-          [[ "$(adb -s emulator-5554 shell getprop sys.boot_completed | tr -d '\r')" == 1 ]]
-      - name: Full production E2E
+      - name: Full production E2E and final user flow share one emulator owner
         shell: bash
         run: |
           set -uo pipefail
@@ -131,16 +108,20 @@ jobs:
           rc=$?
           echo "E2E_EXIT=$rc" >> forensic/e2e-console.txt
           cat forensic/e2e-console.txt
-          exit "$rc"
-      - name: Final production user flow
-        shell: bash
-        run: |
-          set -uo pipefail
+          if [[ "$rc" != 0 ]]; then exit "$rc"; fi
+          test -s e2e-PASS.txt
           bash .github/scripts/final-production-user-flow.sh > forensic/final-flow-console.txt 2>&1
           rc=$?
           echo "FINAL_FLOW_EXIT=$rc" >> forensic/final-flow-console.txt
           cat forensic/final-flow-console.txt
           exit "$rc"
+      - name: Dispose chained production emulator
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          adb -s emulator-5554 emu kill >/dev/null 2>&1
+          exit 0
       - name: Exact failure packet
         if: always()
         shell: bash
