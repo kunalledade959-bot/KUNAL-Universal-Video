@@ -86,11 +86,28 @@ jobs:
               exit 1
             fi
           done
-          for n in $(seq 1 13); do bash .github/scripts/sequence-stage-check.sh "$n"; done
-          grep -RIn 'UniversalAccessibilityService' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
-          grep -RIn 'StageGate' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
-          grep -RIn 'MediaProjection' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
-          grep -RIn 'TextToSpeech' . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null
+          for n in $(seq 1 13); do
+            echo "STATIC_STAGE_CONTRACT_CHECK_START=$n"
+            if ! bash .github/scripts/sequence-stage-check.sh "$n"; then
+              rc=$?
+              echo "STATIC_STAGE_CONTRACT_CHECK_FAIL=$n"
+              echo "STATIC_STAGE_CONTRACT_CHECK_EXIT=$rc"
+              exit "$rc"
+            fi
+            echo "STATIC_STAGE_CONTRACT_CHECK_PASS=$n"
+          done
+          require_repo_token() {
+            local token="$1"
+            if ! grep -RIn "$token" . --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle >/dev/null; then
+              echo "STATIC_REQUIRED_TOKEN_MISSING=$token"
+              exit 1
+            fi
+            echo "STATIC_REQUIRED_TOKEN_PRESENT=$token"
+          }
+          require_repo_token 'UniversalAccessibilityService'
+          require_repo_token 'StageGate'
+          require_repo_token 'MediaProjection'
+          require_repo_token 'TextToSpeech'
 
       - name: Authoritative production build + full emulator E2E
         shell: bash
