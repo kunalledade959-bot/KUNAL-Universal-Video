@@ -59,14 +59,20 @@ jobs:
           (( PS[1] == 0 ))
           "$SDKMANAGER" --install 'platform-tools' 'platforms;android-35' 'build-tools;35.0.0' 'emulator' 'system-images;android-35;default;x86_64'
 
+      - name: Deterministic production quality firewall
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/production-quality-audit.sh
+          bash -n .github/scripts/*.sh
+          python3 -m py_compile *.py
+
       - name: Static zero-bypass gate
         shell: bash
         run: |
           set -euo pipefail
           test -x .github/scripts/self-healing-gate.sh
           test -x .github/scripts/final-production-user-flow.sh
-          bash -n .github/scripts/*.sh
-          python3 -m py_compile *.py
           if grep -RInE --exclude-dir=.git --exclude-dir=build --exclude-dir=.gradle --exclude='*.apk' --exclude='*.png' '(SKIP CHECK|ALLOW FAIL|DISABLE CHECK|TEMP_FIX|ignore failure|continue-on-error:[[:space:]]*true)' .github/scripts .github/workflows *.py *.kt *.xml 2>/dev/null; then
             echo 'ZERO_BYPASS_TOKEN_FOUND'
             exit 1
