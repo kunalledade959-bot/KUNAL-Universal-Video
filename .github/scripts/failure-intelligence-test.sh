@@ -24,7 +24,8 @@ expect(){
   fi
 }
 
-[[ -x "$CLASSIFIER" ]] || fail 'classifier is not executable'
+[[ -s "$CLASSIFIER" ]] || fail 'classifier is missing or empty'
+bash -n "$CLASSIFIER" || fail 'classifier syntax check failed'
 
 expect systemui_anr 'Application Not Responding: com.android.systemui' SYSTEM_ANR SYSTEM
 expect app_crash 'FATAL EXCEPTION: main Process: com.kunal.universalvideo' APP_CRASH RUNTIME
