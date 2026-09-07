@@ -29,10 +29,14 @@ echo 'SELF_HEAL_BUILD_PASS'
 
 cleanup() {
   set +e
-  adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
-  if [[ -n "${EMU_PID:-}" ]]; then
-    kill "$EMU_PID" >/dev/null 2>&1 || true
-    wait "$EMU_PID" >/dev/null 2>&1 || true
+  if [[ "${KUNAL_KEEP_EMULATOR_AFTER_GATE:-0}" != "1" ]]; then
+    adb -s emulator-5554 emu kill >/dev/null 2>&1 || true
+    if [[ -n "${EMU_PID:-}" ]]; then
+      kill "$EMU_PID" >/dev/null 2>&1 || true
+      wait "$EMU_PID" >/dev/null 2>&1 || true
+    fi
+  else
+    echo 'SELF_HEAL_EMULATOR_PRESERVED_FOR_NEXT_GATE'
   fi
 }
 trap cleanup EXIT
