@@ -6,7 +6,7 @@ SRC="activity_fixed.kt"
 
 case "$STAGE" in
 1) fn='stage1'; label='Startup / Self-Diagnostic'; checks=("StageGate(this)" "UUID.randomUUID()" "gate.pass(1,");;
-2) fn='connectMobile'; label='Mobile Connection / Permissions'; checks=("UniversalAccessibilityService.isEnabled" "bridge?.connect(target)" "fail(2,");;
+2) fn='connectMobile'; label='Mobile Connection / Permissions'; checks=("UniversalAccessibilityService.isEnabled" "openAccessibility()" "pass(2," "fail(2,");;
 3) fn='selectTarget'; label='Target APK Selection'; checks=("targetSpinner.selectedItemPosition" "putString(TARGET,target)" "UniversalAccessibilityService.targetPackage=target");;
 4) fn='studyTarget'; label='Study Selected APK'; checks=("getApplicationInfo(target,0)" "getLaunchIntentForPackage(target)" "launch");;
 5) fn='saveStory'; label='Story Input'; checks=("s.length<10" "putString(STORY,s)" "pass(5,");;
