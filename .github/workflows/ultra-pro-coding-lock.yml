@@ -75,8 +75,6 @@ jobs:
           set -euo pipefail
           test -x .github/scripts/self-healing-gate.sh
           test -x .github/scripts/final-production-user-flow.sh
-          # production-quality-audit.sh owns the complete bypass-token scan and
-          # deliberately excludes its own scanner vocabulary to avoid self-matches.
           for f in .github/scripts/*.sh; do
             case "$f" in
               .github/scripts/production-quality-audit.sh|.github/scripts/failure-intelligence-test.sh) continue ;;
@@ -141,7 +139,7 @@ jobs:
         run: |
           set -euo pipefail
           test -s KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
-          grep -Fq '\"status\": \"STATIC_AND_BUILD_VERIFIED\"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
+          grep -Fq '"status": "STATIC_AND_BUILD_VERIFIED"' KUNAL_UNIVERSAL_VIDEO_PRO_V3_REPORT.json
           test -s final-user-flow-evidence/final-user-flow.log
           test -s final-user-flow-evidence/ui-after-stage2.xml
           test -s final-user-flow-evidence/ui-after-save.xml
