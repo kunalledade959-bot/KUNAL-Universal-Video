@@ -1,0 +1,52 @@
+{
+  "project": {
+    "title": "Raju and the Puppy",
+    "fps": 24,
+    "width": 720,
+    "height": 1280,
+    "style": "polished_stylized_3d_cartoon",
+    "duration_seconds": 12
+  },
+  "characters": [
+    {
+      "id": "raju",
+      "type": "human",
+      "display_name": "Raju",
+      "dna": {
+        "body_scale": 1.0,
+        "skin": [0.55, 0.30, 0.18, 1.0],
+        "shirt": [0.05, 0.25, 0.75, 1.0],
+        "pants": [0.08, 0.08, 0.12, 1.0],
+        "hair": [0.04, 0.02, 0.01, 1.0]
+      }
+    },
+    {
+      "id": "puppy",
+      "type": "dog",
+      "display_name": "Puppy",
+      "dna": {
+        "body_scale": 0.55,
+        "fur": [0.55, 0.32, 0.16, 1.0]
+      }
+    }
+  ],
+  "world": {
+    "id": "village_morning",
+    "ground": [0.35, 0.58, 0.22, 1.0],
+    "sky": [0.55, 0.78, 1.0, 1.0]
+  },
+  "scenes": [
+    {
+      "id": "scene_01",
+      "start": 1,
+      "end": 288,
+      "camera": {"type": "wide", "x": 0.0, "y": -10.0, "z": 5.0, "lens": 42},
+      "actors": [
+        {"character": "raju", "action": "walk", "start": 1, "end": 168, "from": [-4, 0, 0], "to": [1, 0, 0]},
+        {"character": "raju", "action": "look_right", "start": 169, "end": 216},
+        {"character": "puppy", "action": "sit", "start": 1, "end": 216, "position": [3, 0, 0]},
+        {"character": "raju", "action": "walk", "start": 217, "end": 288, "from": [1, 0, 0], "to": [2.5, 0, 0]}
+      ]
+    }
+  ]
+}
