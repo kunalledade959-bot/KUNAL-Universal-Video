@@ -1,10 +1,7 @@
-# Browser Worker
+# Browser Worker v0.2
 
-A policy-safe browser worker layer for the Story-to-Video engine.
+Target adapter: ShaheerTools at https://shaheertools.com/. Its current product page describes browser-only bulk generation, no signup/API key, 1000+ batch testing, character consistency, retry-failed and ZIP export. These are vendor claims, not runtime verification.
 
-It is designed to control user-authorized browser tabs and collect outputs from compatible generators. It must stop on CAPTCHA, mandatory login, rate limits, ambiguous output mapping, or a site that disallows automation. It never bypasses those controls.
+Current adapter can heuristically detect a prompt input and generation button, submit a batch, and stop on CAPTCHA/login/rate-limit indicators.
 
-Architecture:
-Story Director -> Job Queue -> Worker 1..5 -> Backend Adapter -> Verify -> Retry Queue.
-
-This folder is the browser-worker contract and local controller boundary. The actual browser extension can be implemented as Manifest V3.
+Not complete yet: result-image discovery, deterministic frame mapping, downloads, checksums and end-to-end browser verification. Do not call this production-ready until those are tested in a real browser.
